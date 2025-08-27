@@ -1,0 +1,444 @@
+# universal - v1.0.0
+import sys
+import subprocess
+import os
+import json
+import tempfile
+import time
+from pathlib import Path
+import asyncio
+import re
+import string
+import shutil
+import datetime
+
+try:
+    import requests
+    import yt_dlp
+    import discord
+    import cloudscraper
+    from yt_dlp.utils import DownloadError, ExtractorError
+except ImportError:
+    print("Missing libraries will be installed...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "yt-dlp", "discord.py", "cloudscraper"])
+        print("Installation complete. Please restart the script.")
+    except Exception as e:
+        print(f"Error installing dependencies: {e}")
+    sys.exit()
+
+class Colors:
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    CYAN = '\033[96m'
+    RED = '\033[91m'
+    RESET = '\033[0m'
+
+def pause_on_error():
+    input(f"\n{Colors.CYAN}[Press Enter to exit...]{Colors.RESET}")
+
+def check_ffmpeg():
+    try:
+        subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True, text=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+def load_config():
+    config_file_path = "config.json"
+    default_config = {
+        "download_path": "",
+        "gofile_Account_Token": "",
+        "gofile_folder_id": "",
+        "discord_bot_token": "",
+        "discord_channel_id": ""
+    }
+    if os.path.exists(config_file_path):
+        try:
+            with open(config_file_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            for key in default_config:
+                if key not in config:
+                    config[key] = ""
+            return config
+        except json.JSONDecodeError as e:
+            print(f"{Colors.RED}Config file is corrupted: {e}. Please fix or delete '{config_file_path}'.{Colors.RESET}")
+            return None
+        except Exception as e:
+            print(f"{Colors.RED}Error reading config file: {e}{Colors.RESET}")
+            return None
+
+    try:
+        with open(config_file_path, 'w', encoding='utf-8') as f:
+            json.dump(default_config, f, indent=2)
+    except Exception as e:
+        print(f"{Colors.RED}Failed to write config: {e}{Colors.RESET}")
+        return None
+    return default_config
+
+def save_config(config):
+    config_file_path = "config.json"
+    try:
+        with open(config_file_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"{Colors.RED}Failed to save config: {e}{Colors.RESET}")
+
+def get_gofile_server():
+    try:
+        response = requests.get("https://api.gofile.io/servers")
+        response.raise_for_status()
+        servers = response.json()
+        if servers['status'] == 'ok' and servers['data']['servers']:
+            return servers['data']['servers'][0]['name']
+    except requests.exceptions.RequestException as e:
+        print(f"{Colors.RED}Failed to get Gofile server: {e}{Colors.RESET}")
+        return None
+    return None
+
+def upload_to_gofile(file_path, server, account_token=None, folder_id=None):
+    try:
+        with open(file_path, 'rb') as f:
+            files = {'file': f}
+            url = f"https://{server}.gofile.io/uploadFile"
+            data = {}
+            if account_token:
+                data['token'] = account_token
+            if folder_id:
+                data['folderId'] = folder_id
+
+            response = requests.post(url, files=files, data=data)
+            response.raise_for_status()
+
+            upload_data = response.json()
+            if upload_data['status'] == 'ok':
+                return True, "Successfully uploaded to Gofile."
+            else:
+                return False, f"Gofile upload failed: {upload_data.get('message', 'Unknown error')}"
+    except requests.exceptions.RequestException as e:
+        return False, f"Error uploading to Gofile: {e}"
+    except Exception as e:
+        return False, f"An unexpected error occurred during upload: {e}"
+
+def sanitize_filename(text):
+    valid_chars = f"-_.() {string.ascii_letters}{string.digits}"
+    sanitized_text = ''.join(c for c in text if c in valid_chars)
+    sanitized_text = sanitized_text.replace(' ', '_')
+    return sanitized_text[:100]
+
+def get_unique_filename(base_dir, base_name, ext):
+    """
+    Returns a unique filename in given directory, if file already exists, adds a number/time.
+    """
+    candidate = f"{base_name}.{ext}"
+    candidate_path = os.path.join(base_dir, candidate)
+    if not os.path.exists(candidate_path):
+        return candidate_path
+
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = f"{base_name}_{ts}.{ext}"
+    candidate_path = os.path.join(base_dir, candidate)
+    if not os.path.exists(candidate_path):
+        return candidate_path
+
+    for i in range(100):
+        candidate = f"{base_name}_{ts}_{i}.{ext}"
+        candidate_path = os.path.join(base_dir, candidate)
+        if not os.path.exists(candidate_path):
+            return candidate_path
+    raise RuntimeError("Could not generate unique filename for download.")
+
+def download_universal_video(url, config, upload_to_gofile_enabled, gofile_server=None):
+    download_target_dir = tempfile.mkdtemp() if upload_to_gofile_enabled else config["download_path"]
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    generic_cookie_file = os.path.join(script_dir, "cookies.txt")
+
+
+    ydl_opts_info = {
+        'quiet': True,
+        'skip_download': True,
+        'extractor_args': {'generic': ['impersonate']},
+    }
+    if os.path.exists(generic_cookie_file):
+        ydl_opts_info['cookiefile'] = generic_cookie_file
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+            info_dict = ydl.extract_info(url, download=False)
+            title = info_dict.get("title", "video")
+            ext = info_dict.get("ext", "mp4")
+    except Exception as e:
+        if upload_to_gofile_enabled and os.path.isdir(download_target_dir):
+            shutil.rmtree(download_target_dir, ignore_errors=True)
+        return False, f"Could not fetch video info: {e}", 0, 0
+
+    safe_title = sanitize_filename(title)
+    final_path = get_unique_filename(download_target_dir, safe_title, ext)
+
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': final_path,
+        'postprocessors': [{
+            'key': 'FFmpegVideoConvertor',
+            'preferedformat': 'mp4',
+        }],
+        'quiet': True,
+        'extractor_args': {'generic': ['impersonate']},
+    }
+    if os.path.exists(generic_cookie_file):
+        ydl_opts['cookiefile'] = generic_cookie_file
+
+    def attempt_download(url, session=None):
+        opts = ydl_opts.copy()
+        if session:
+            opts['http_session'] = session
+        start_time = time.time()
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.extract_info(url, download=True)
+            end_time = time.time()
+            download_duration = end_time - start_time
+            file_size = os.path.getsize(final_path)
+            return True, final_path, "", file_size, download_duration
+        except DownloadError as e:
+            if "Cloudflare" in str(e) or "403" in str(e):
+                return False, None, "cloudflare_error", 0, 0
+            return False, None, str(e), 0, 0
+        except ExtractorError as e:
+            return False, None, f"Extractor Error: {str(e)}", 0, 0
+        except Exception as e:
+            return False, None, f"An unexpected error occurred: {type(e).__name__} - {str(e)}", 0, 0
+
+    success, final_path_real, error_message, file_size, download_duration = attempt_download(url)
+
+    if not success and error_message == "cloudflare_error":
+        try:
+            session = cloudscraper.create_scraper()
+            success, final_path_real, error_message, file_size, download_duration = attempt_download(url, session)
+        except Exception as e:
+            if upload_to_gofile_enabled and os.path.isdir(download_target_dir):
+                shutil.rmtree(download_target_dir, ignore_errors=True)
+            return False, f"An unexpected error occurred during bypass: {type(e).__name__} - {e}", 0, 0
+
+    if success:
+        if upload_to_gofile_enabled:
+            success, message = upload_to_gofile(final_path, gofile_server, config.get("gofile_Account_Token"), config.get("gofile_folder_id"))
+            try:
+                os.remove(final_path)
+            except Exception as e:
+                print(f"{Colors.YELLOW}Warning: Could not remove file {final_path}: {e}{Colors.RESET}")
+            try:
+                shutil.rmtree(os.path.dirname(final_path), ignore_errors=True)
+            except Exception as e:
+                print(f"{Colors.YELLOW}Warning: Could not remove temp dir: {e}{Colors.RESET}")
+            return success, message, file_size, download_duration
+        else:
+            final_filename = os.path.basename(final_path)
+            message = f"Video successfully downloaded and saved as '{final_filename}'."
+            return True, message, file_size, download_duration
+    else:
+        if upload_to_gofile_enabled and os.path.isdir(download_target_dir):
+            shutil.rmtree(download_target_dir, ignore_errors=True)
+        return False, f"Download failed. Cause: {error_message}", file_size, download_duration
+
+async def get_links_from_discord(config):
+    if not config.get("discord_bot_token"):
+        token = input(f"{Colors.CYAN}Please enter your Discord bot token: {Colors.RESET}")
+        config["discord_bot_token"] = token.strip()
+        save_config(config)
+
+    if not config.get("discord_channel_id"):
+        channel_id = input(f"{Colors.CYAN}Please enter the Discord channel ID: {Colors.RESET}")
+        config["discord_channel_id"] = channel_id.strip()
+        save_config(config)
+
+    if not config.get("discord_bot_token") or not config.get("discord_channel_id"):
+        print(f"{Colors.RED}Discord bot token or channel ID is missing. The function cannot be executed.{Colors.RESET}")
+        return []
+
+    intents = discord.Intents.default()
+    intents.message_content = True
+    client = discord.Client(intents=intents)
+    links = []
+
+    @client.event
+    async def on_ready():
+        print(f'{Colors.CYAN}Logged in as bot "{client.user}".{Colors.RESET}')
+        try:
+            channel_id = int(config["discord_channel_id"])
+            channel = client.get_channel(channel_id)
+            if not channel:
+                print(f"{Colors.RED}Channel with ID {channel_id} could not be found.{Colors.RESET}")
+                await client.close()
+                return
+
+            print(f"{Colors.YELLOW}Reading messages from channel '{channel.name}'...{Colors.RESET}")
+            async for message in channel.history(limit=1000):
+                links.extend(re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', message.content))
+
+            print(f" {Colors.GREEN}{len(links)} links found on Discord.{Colors.RESET}")
+            await client.close()
+        except Exception as e:
+            print(f"{Colors.RED}Error accessing Discord: {e}{Colors.RESET}")
+            await client.close()
+
+    try:
+        await client.start(config["discord_bot_token"])
+    except discord.errors.LoginFailure:
+        print(f"{Colors.RED}The Discord token is invalid. Please check it in config.json and restart the tool.{Colors.RESET}")
+        return []
+    except Exception as e:
+        print(f"{Colors.RED}An unexpected error occurred while connecting to Discord: {e}{Colors.RESET}")
+        return []
+
+    return links
+
+async def process_links(links, config, upload_to_gofile_enabled):
+    total_links = len(links)
+    if total_links == 0:
+        return
+
+    gofile_server = None
+    if upload_to_gofile_enabled:
+        gofile_server = get_gofile_server()
+        if not gofile_server:
+            print(f"{Colors.RED}Could not find a Gofile server. Cannot upload.{Colors.RESET}")
+            upload_to_gofile_enabled = False
+
+    if total_links > 1:
+        print(f"{Colors.YELLOW}Starting to process {total_links} links.{Colors.RESET}")
+
+    downloads_completed = 0
+    for i, url in enumerate(links):
+        if total_links > 1:
+            print(f"\n{Colors.CYAN}Processing link {i + 1} of {total_links}{Colors.RESET}")
+        else:
+            print(f"\n{Colors.CYAN}Starting the download...{Colors.RESET}")
+
+        try:
+            success, message, file_size, download_duration = await asyncio.to_thread(download_universal_video, url, config, upload_to_gofile_enabled, gofile_server)
+        except Exception as e:
+            print(f"{Colors.RED}Download error: {e}{Colors.RESET}")
+            continue
+
+        if success:
+            downloads_completed += 1
+            size_str = f"{file_size / (1024 * 1024):.2f} MB" if file_size < 1024 * 1024 * 1024 else f"{file_size / (1024 * 1024 * 1024):.2f} GB"
+            duration_str = f"{download_duration:.2f} seconds"
+            print(f"{Colors.GREEN}    - Status: {message}{Colors.RESET}")
+            print(f"      - Size: {size_str}")
+            print(f"      - Download Time: {duration_str}")
+        else:
+            print(f"{Colors.RED}    - Status: {message}{Colors.RESET}")
+
+    print(f"\n{Colors.YELLOW}Processing completed. {downloads_completed} out of {total_links} downloads successful.{Colors.RESET}")
+
+def is_valid_download_path(path_str):
+    try:
+        path = Path(path_str).resolve()
+        if not path.exists():
+            path.mkdir(parents=True, exist_ok=True)
+        return path.is_dir() and os.access(str(path), os.W_OK)
+    except Exception as e:
+        print(f"{Colors.RED}Invalid path '{path_str}': {e}{Colors.RESET}")
+        return False
+
+async def main():
+    config = load_config()
+    if config is None:
+        pause_on_error()
+        return
+
+    download_path = config.get("download_path")
+    while not download_path or not is_valid_download_path(download_path):
+        download_path_input = input(f"{Colors.CYAN}Please enter the desired download path: {Colors.RESET}")
+        if not is_valid_download_path(download_path_input):
+            print(f"{Colors.RED}Path is invalid or not writeable. Try again.{Colors.RESET}")
+            continue
+        download_path = str(Path(download_path_input).resolve())
+        config["download_path"] = download_path.replace('\\', '/')
+        save_config(config)
+
+    print(f"\n{Colors.CYAN}====================================================")
+    print(f"               Welcome to Universal  ")
+    print(f"====================================================")
+
+    if not check_ffmpeg():
+        print(f"{Colors.YELLOW}WARNING: FFmpeg not found. Video and audio conversion may fail.{Colors.RESET}")
+        print("Please install FFmpeg to use all features.")
+
+    print(f"\n{Colors.CYAN}Configuration:{Colors.RESET}")
+    print(f"  {Colors.YELLOW}- Videos will be saved to '{config['download_path']}'.{Colors.RESET}")
+    print(f"  {Colors.YELLOW}- Gofile Token is set: {'Yes' if config.get('gofile_Account_Token') else 'No'}.{Colors.RESET}")
+    print(f"  {Colors.YELLOW}- Gofile Folder ID is set: {'Yes' if config.get('gofile_folder_id') else 'No'}.{Colors.RESET}")
+
+    while True:
+        links_to_download = []
+        user_choice = input(f"""
+{Colors.CYAN}----------------------------------------------------{Colors.RESET}
+{Colors.YELLOW}How would you like to provide the links?{Colors.RESET}
+  {Colors.CYAN}[1] Enter a link{Colors.RESET}
+  {Colors.CYAN}[2] From a .txt file{Colors.RESET}
+  {Colors.CYAN}[3] From a Discord channel{Colors.RESET}
+{Colors.CYAN}----------------------------------------------------{Colors.RESET}
+{Colors.CYAN}Selection: {Colors.RESET}""").lower()
+
+        if user_choice == '1':
+            user_input = input(f"{Colors.CYAN}enter the link\n{Colors.RESET}").strip()
+            if user_input:
+                links_to_download.append(user_input)
+        elif user_choice == '2':
+            while True:
+                file_name = input(f"{Colors.CYAN}Please enter the name of the .txt file: {Colors.RESET}")
+                if os.path.exists(file_name):
+                    with open(file_name, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            url = line.strip()
+                            if url and url.startswith(("http://", "https://")):
+                                links_to_download.append(url)
+                    if not links_to_download:
+                        print(f"{Colors.RED}The file '{file_name}' was found, but it contains no valid links.{Colors.RESET}")
+                        continue
+                    else:
+                        print(f"{Colors.GREEN}Successfully found {len(links_to_download)} links in '{file_name}'.{Colors.RESET}")
+                        break
+                else:
+                    print(f"{Colors.RED}Error: The file '{file_name}' was not found.{Colors.RESET}")
+                    continue
+        elif user_choice == '3':
+            links_to_download = await get_links_from_discord(config)
+        else:
+            print(f"{Colors.RED}Invalid selection. Please enter '1', '2' or '3'.{Colors.RESET}")
+            continue
+
+        if not links_to_download:
+            continue
+
+        print(f"\n{Colors.YELLOW}Would you like to save the videos locally (1) or upload them to Gofile (2)?{Colors.RESET}")
+        upload_choice = input(f"{Colors.CYAN}Selection: {Colors.RESET}").lower()
+        upload_to_gofile_enabled = upload_choice == '2'
+
+        if upload_to_gofile_enabled:
+            while not config.get("gofile_Account_Token"):
+                api_key = input(f"{Colors.CYAN}Please enter your Gofile Account Token (This is mandatory for uploads): {Colors.RESET}")
+                if api_key.strip():
+                    config["gofile_Account_Token"] = api_key.strip()
+                    save_config(config)
+                else:
+                    print(f"{Colors.RED}Gofile Account Token cannot be empty. Please enter a valid key.{Colors.RESET}")
+
+            while not config.get("gofile_folder_id"):
+                folder_id = input(f"{Colors.CYAN}Please enter the destination folder ID (This is mandatory for uploads): {Colors.RESET}")
+                if folder_id.strip():
+                    config["gofile_folder_id"] = folder_id.strip()
+                    save_config(config)
+                else:
+                    print(f"{Colors.RED}Folder ID cannot be empty. Please enter a valid ID.{Colors.RESET}")
+
+        await process_links(links_to_download, config, upload_to_gofile_enabled)
+
+    time.sleep(2)
+
+if __name__ == "__main__":
+    asyncio.run(main())
