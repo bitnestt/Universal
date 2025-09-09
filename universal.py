@@ -1,4 +1,4 @@
-# universal - v1.0.0
+# universal - v1.1.0
 import sys
 import subprocess
 import os
@@ -127,9 +127,6 @@ def sanitize_filename(text):
     return sanitized_text[:100]
 
 def get_unique_filename(base_dir, base_name, ext):
-    """
-    Returns a unique filename in given directory, if file already exists, adds a number/time.
-    """
     candidate = f"{base_name}.{ext}"
     candidate_path = os.path.join(base_dir, candidate)
     if not os.path.exists(candidate_path):
@@ -148,12 +145,33 @@ def get_unique_filename(base_dir, base_name, ext):
             return candidate_path
     raise RuntimeError("Could not generate unique filename for download.")
 
+TRAILING_CHARS = '>)],.;\'"“”„`´’!?'
+
+def clean_url(u: str) -> str:
+    if not u:
+        return u
+    u = u.strip()
+    if u.startswith('<') and u.endswith('>') and len(u) > 2:
+        u = u[1:-1]
+    while len(u) > 0 and u[-1] in TRAILING_CHARS:
+        u = u[:-1]
+    return u
+
+def dedupe_and_clean(url_list):
+    seen = set()
+    cleaned = []
+    for u in url_list:
+        cu = clean_url(u)
+        if cu and cu not in seen:
+            seen.add(cu)
+            cleaned.append(cu)
+    return cleaned
+
 def download_universal_video(url, config, upload_to_gofile_enabled, gofile_server=None):
     download_target_dir = tempfile.mkdtemp() if upload_to_gofile_enabled else config["download_path"]
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     generic_cookie_file = os.path.join(script_dir, "cookies.txt")
-
 
     ydl_opts_info = {
         'quiet': True,
@@ -260,7 +278,9 @@ async def get_links_from_discord(config):
     intents = discord.Intents.default()
     intents.message_content = True
     client = discord.Client(intents=intents)
-    links = []
+    raw_links = []
+
+    url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
 
     @client.event
     async def on_ready():
@@ -270,17 +290,22 @@ async def get_links_from_discord(config):
             channel = client.get_channel(channel_id)
             if not channel:
                 print(f"{Colors.RED}Channel with ID {channel_id} could not be found.{Colors.RESET}")
+                client.cleaned_links = []
                 await client.close()
                 return
 
             print(f"{Colors.YELLOW}Reading messages from channel '{channel.name}'...{Colors.RESET}")
             async for message in channel.history(limit=1000):
-                links.extend(re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', message.content))
+                found = url_pattern.findall(message.content)
+                if found:
+                    raw_links.extend(found)
 
-            print(f" {Colors.GREEN}{len(links)} links found on Discord.{Colors.RESET}")
+            client.cleaned_links = dedupe_and_clean(raw_links)
+            print(f" {Colors.GREEN}{len(client.cleaned_links)} links found on Discord.{Colors.RESET}")
             await client.close()
         except Exception as e:
             print(f"{Colors.RED}Error accessing Discord: {e}{Colors.RESET}")
+            client.cleaned_links = []
             await client.close()
 
     try:
@@ -292,7 +317,7 @@ async def get_links_from_discord(config):
         print(f"{Colors.RED}An unexpected error occurred while connecting to Discord: {e}{Colors.RESET}")
         return []
 
-    return links
+    return getattr(client, "cleaned_links", [])
 
 async def process_links(links, config, upload_to_gofile_enabled):
     total_links = len(links)
@@ -310,14 +335,18 @@ async def process_links(links, config, upload_to_gofile_enabled):
         print(f"{Colors.YELLOW}Starting to process {total_links} links.{Colors.RESET}")
 
     downloads_completed = 0
-    for i, url in enumerate(links):
+    for i, raw_url in enumerate(links):
         if total_links > 1:
             print(f"\n{Colors.CYAN}Processing link {i + 1} of {total_links}{Colors.RESET}")
         else:
             print(f"\n{Colors.CYAN}Starting the download...{Colors.RESET}")
 
+        url = clean_url(raw_url)
+
         try:
-            success, message, file_size, download_duration = await asyncio.to_thread(download_universal_video, url, config, upload_to_gofile_enabled, gofile_server)
+            success, message, file_size, download_duration = await asyncio.to_thread(
+                download_universal_video, url, config, upload_to_gofile_enabled, gofile_server
+            )
         except Exception as e:
             print(f"{Colors.RED}Download error: {e}{Colors.RESET}")
             continue
@@ -387,16 +416,18 @@ async def main():
         if user_choice == '1':
             user_input = input(f"{Colors.CYAN}enter the link\n{Colors.RESET}").strip()
             if user_input:
-                links_to_download.append(user_input)
+                links_to_download.extend(dedupe_and_clean([user_input]))
         elif user_choice == '2':
             while True:
                 file_name = input(f"{Colors.CYAN}Please enter the name of the .txt file: {Colors.RESET}")
                 if os.path.exists(file_name):
+                    collected = []
                     with open(file_name, 'r', encoding='utf-8') as f:
                         for line in f:
                             url = line.strip()
                             if url and url.startswith(("http://", "https://")):
-                                links_to_download.append(url)
+                                collected.append(url)
+                    links_to_download = dedupe_and_clean(collected)
                     if not links_to_download:
                         print(f"{Colors.RED}The file '{file_name}' was found, but it contains no valid links.{Colors.RESET}")
                         continue
