@@ -1,4 +1,4 @@
-# universal - v1.1.0
+# universal - v1.2.0
 import sys
 import subprocess
 import os
@@ -34,6 +34,23 @@ class Colors:
     RED = '\033[91m'
     RESET = '\033[0m'
 
+def ensure_console_size(cols=140, lines=50, buffer_lines=5000):
+    if os.name != 'nt':
+        return
+    try:
+        os.system(f"mode con: cols={cols} lines={lines}")
+    except Exception:
+        pass
+    try:
+        import ctypes
+        class COORD(ctypes.Structure):
+            _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+        kernel32 = ctypes.windll.kernel32
+        hOut = kernel32.GetStdHandle(-11)
+        kernel32.SetConsoleScreenBufferSize(hOut, COORD(cols, max(lines, buffer_lines)))
+    except Exception:
+        pass
+
 def pause_on_error():
     input(f"\n{Colors.CYAN}[Press Enter to exit...]{Colors.RESET}")
 
@@ -59,7 +76,7 @@ def load_config():
                 config = json.load(f)
             for key in default_config:
                 if key not in config:
-                    config[key] = ""
+                    config[key] = default_config[key]
             return config
         except json.JSONDecodeError as e:
             print(f"{Colors.RED}Config file is corrupted: {e}. Please fix or delete '{config_file_path}'.{Colors.RESET}")
@@ -167,6 +184,56 @@ def dedupe_and_clean(url_list):
             cleaned.append(cu)
     return cleaned
 
+ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+def visible_len(s):
+    return len(ANSI_RE.sub('', s))
+
+def format_bytes(n):
+    try:
+        n = float(n)
+    except:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    while n >= 1024 and i < len(units) - 1:
+        n /= 1024.0
+        i += 1
+    return f"{n:.2f} {units[i]}"
+
+def format_seconds(s):
+    try:
+        s = int(round(float(s)))
+    except:
+        return "--:--"
+    h = s // 3600
+    m = (s % 3600) // 60
+    sec = s % 60
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{sec:02d}"
+    return f"{m:02d}:{sec:02d}"
+
+def make_bar(pct, width=34):
+    try:
+        pct = float(pct)
+    except:
+        pct = 0.0
+    pct = max(0.0, min(1.0, pct))
+    filled = int(pct * width)
+    if filled >= width:
+        return "[" + "█" * width + "]"
+    return "[" + "█" * filled + ">" + "═" * (width - filled - 1) + "]"
+
+class QuietLogger:
+    def debug(self, msg): 
+        pass
+    def warning(self, msg): 
+        pass
+    def error(self, msg):
+        try:
+            print(f"{Colors.RED}{msg}{Colors.RESET}")
+        except:
+            print(msg)
+
 def download_universal_video(url, config, upload_to_gofile_enabled, gofile_server=None):
     download_target_dir = tempfile.mkdtemp() if upload_to_gofile_enabled else config["download_path"]
 
@@ -175,7 +242,10 @@ def download_universal_video(url, config, upload_to_gofile_enabled, gofile_serve
 
     ydl_opts_info = {
         'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
         'skip_download': True,
+        'logger': QuietLogger(),
         'extractor_args': {'generic': ['impersonate']},
     }
     if os.path.exists(generic_cookie_file):
@@ -193,39 +263,106 @@ def download_universal_video(url, config, upload_to_gofile_enabled, gofile_serve
 
     safe_title = sanitize_filename(title)
     final_path = get_unique_filename(download_target_dir, safe_title, ext)
+    base_no_ext = os.path.splitext(final_path)[0]
+
+    prog = {'len': 0, 't': 0.0, 'pct': -1.0, 'delta': 1.0, 'started': False}
+
+    def write_progress(line):
+        now = time.time()
+        if (now - prog['t'] < 0.12) and (abs(prog['delta']) < 0.004):
+            return
+        prog['t'] = now
+        vis = visible_len(line)
+        pad = max(0, prog['len'] - vis)
+        try:
+            sys.stdout.write('\r' + line + (' ' * pad))
+            sys.stdout.flush()
+            prog['len'] = max(prog['len'], vis)
+        except:
+            pass
+
+    def clear_progress():
+        if prog['len'] > 0:
+            try:
+                sys.stdout.write('\r' + (' ' * prog['len']) + '\r')
+                sys.stdout.flush()
+            except:
+                pass
+            prog['len'] = 0
+
+    def progress_hook(d):
+        status = d.get('status')
+        if status == 'downloading':
+            if not prog['started']:
+                print("")
+                prog['started'] = True
+            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+            downloaded = d.get('downloaded_bytes', 0)
+            pct = (downloaded / total) if total else 0.0
+            prog['delta'] = (pct - prog['pct']) if prog['pct'] >= 0 else 1.0
+            prog['pct'] = pct
+            bar = make_bar(pct, 34)
+            spd = d.get('speed') or 0
+            speed_str = f"{format_bytes(spd)}/s" if spd else "--/s"
+            eta = d.get('eta')
+            eta_str = format_seconds(eta) if eta is not None else "--:--"
+            dl_str = format_bytes(downloaded)
+            tot_str = format_bytes(total) if total else "?"
+            pct_str = f"{pct*100:5.1f}%"
+            line = f"{bar} {pct_str} {dl_str}/{tot_str} {speed_str:>9} ETA {eta_str}"
+            write_progress(line)
+        elif status == 'finished':
+            clear_progress()
 
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': final_path,
+        'outtmpl': base_no_ext + ".%(ext)s",
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4',
         }],
         'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
+        'logger': QuietLogger(),
         'extractor_args': {'generic': ['impersonate']},
+        'progress_hooks': [progress_hook],
     }
     if os.path.exists(generic_cookie_file):
         ydl_opts['cookiefile'] = generic_cookie_file
 
-    def attempt_download(url, session=None):
+    def find_final_output(base_root):
+        exts = ["mp4", "webm", "mkv", "mov", "m4a", "mp3"]
+        for e in exts:
+            p = f"{base_root}.{e}"
+            if os.path.exists(p):
+                return p
+        return base_root + "." + ext
+
+    def attempt_download(url_dl, session=None):
         opts = ydl_opts.copy()
         if session:
             opts['http_session'] = session
         start_time = time.time()
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.extract_info(url, download=True)
+                ydl.extract_info(url_dl, download=True)
             end_time = time.time()
+            clear_progress()
+            final_effective = find_final_output(base_no_ext)
             download_duration = end_time - start_time
-            file_size = os.path.getsize(final_path)
-            return True, final_path, "", file_size, download_duration
+            file_size = os.path.getsize(final_effective)
+            return True, final_effective, "", file_size, download_duration
         except DownloadError as e:
+            clear_progress()
             if "Cloudflare" in str(e) or "403" in str(e):
                 return False, None, "cloudflare_error", 0, 0
             return False, None, str(e), 0, 0
         except ExtractorError as e:
+            clear_progress()
             return False, None, f"Extractor Error: {str(e)}", 0, 0
         except Exception as e:
+            clear_progress()
             return False, None, f"An unexpected error occurred: {type(e).__name__} - {str(e)}", 0, 0
 
     success, final_path_real, error_message, file_size, download_duration = attempt_download(url)
@@ -241,18 +378,18 @@ def download_universal_video(url, config, upload_to_gofile_enabled, gofile_serve
 
     if success:
         if upload_to_gofile_enabled:
-            success, message = upload_to_gofile(final_path, gofile_server, config.get("gofile_Account_Token"), config.get("gofile_folder_id"))
+            success_up, message = upload_to_gofile(final_path_real, gofile_server, config.get("gofile_Account_Token"), config.get("gofile_folder_id"))
             try:
-                os.remove(final_path)
+                os.remove(final_path_real)
             except Exception as e:
-                print(f"{Colors.YELLOW}Warning: Could not remove file {final_path}: {e}{Colors.RESET}")
+                print(f"{Colors.YELLOW}Warning: Could not remove file {final_path_real}: {e}{Colors.RESET}")
             try:
-                shutil.rmtree(os.path.dirname(final_path), ignore_errors=True)
+                shutil.rmtree(os.path.dirname(final_path_real), ignore_errors=True)
             except Exception as e:
                 print(f"{Colors.YELLOW}Warning: Could not remove temp dir: {e}{Colors.RESET}")
-            return success, message, file_size, download_duration
+            return success_up, message, file_size, download_duration
         else:
-            final_filename = os.path.basename(final_path)
+            final_filename = os.path.basename(final_path_real)
             message = f"Video successfully downloaded and saved as '{final_filename}'."
             return True, message, file_size, download_duration
     else:
@@ -373,7 +510,119 @@ def is_valid_download_path(path_str):
         print(f"{Colors.RED}Invalid path '{path_str}': {e}{Colors.RESET}")
         return False
 
+def open_settings_menu(config):
+    def _clear():
+        try:
+            os.system('cls' if os.name == 'nt' else 'clear')
+        except Exception:
+            pass
+
+    entries = [
+        ("Download path", str(config.get('download_path', '') or '')),
+        ("Gofile Account Token", str(config.get('gofile_Account_Token', '') or '')),
+        ("Gofile Folder ID", str(config.get('gofile_folder_id', '') or '')),
+        ("Discord bot token", str(config.get('discord_bot_token', '') or '')),
+        ("Discord channel ID", str(config.get('discord_channel_id', '') or '')),
+    ]
+
+    _clear()
+    print(f"{Colors.CYAN}------------------- Settings --------------------{Colors.RESET}")
+    label_width = max((len(label) for label, _ in entries), default=0)
+    for label, value in entries:
+        is_set = bool(str(value).strip())
+        flag = f"{Colors.GREEN}YES{Colors.RESET}" if is_set else f"{Colors.RED}NO {Colors.RESET}"
+        print(f"  {flag} - {label:<{label_width}}: {value}")
+    print(f"{Colors.CYAN}--------------------------------------------------{Colors.RESET}")
+
+    while True:
+        print("Choose an option:")
+        print("  [1] Change download path")
+        print("  [2] Set/Change Gofile Account Token")
+        print("  [3] Set/Change Gofile Folder ID")
+        print("  [4] Set/Change Discord bot token")
+        print("  [5] Set/Change Discord channel ID")
+        print("  [0] Back to main menu")
+        print(f"{Colors.CYAN}--------------------------------------------------{Colors.RESET}")
+        choice = input(f"{Colors.CYAN}Selection: {Colors.RESET}").strip().lower()
+
+        if choice == '0':
+            break
+
+        if choice not in {'1','2','3','4','5'}:
+            _clear()
+            print(f"{Colors.RED}Invalid selection.{Colors.RESET}")
+            continue
+
+        if choice == '1':
+            _clear()
+            print("Selection: 1")
+            new_path = input(f"{Colors.CYAN}Enter new download path: {Colors.RESET}").strip()
+            if new_path == "":
+                print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
+            else:
+                current_path = str(config.get("download_path", "") or "")
+                normalized = str(Path(new_path).resolve()).replace('\\', '/')
+                if normalized == current_path:
+                    print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
+                elif is_valid_download_path(new_path):
+                    config["download_path"] = normalized
+                    save_config(config)
+                    print(f"{Colors.GREEN}Download path updated.{Colors.RESET}")
+                else:
+                    print(f"{Colors.RED}Invalid path or not writable.{Colors.RESET}")
+
+        elif choice == '2':
+            _clear()
+            print("Selection: 2")
+            current = str(config.get("gofile_Account_Token", "") or "")
+            token = input(f"{Colors.CYAN}Enter Gofile Account Token: {Colors.RESET}").strip()
+            if token == "" or token == current:
+                print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
+            else:
+                config["gofile_Account_Token"] = token
+                save_config(config)
+                print(f"{Colors.GREEN}Gofile Account Token updated.{Colors.RESET}")
+
+        elif choice == '3':
+            _clear()
+            print("Selection: 3")
+            current = str(config.get("gofile_folder_id", "") or "")
+            fid = input(f"{Colors.CYAN}Enter Gofile Folder ID: {Colors.RESET}").strip()
+            if fid == "" or fid == current:
+                print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
+            else:
+                config["gofile_folder_id"] = fid
+                save_config(config)
+                print(f"{Colors.GREEN}Gofile Folder ID updated.{Colors.RESET}")
+
+        elif choice == '4':
+            _clear()
+            print("Selection: 4")
+            current = str(config.get("discord_bot_token", "") or "")
+            token = input(f"{Colors.CYAN}Enter Discord bot token: {Colors.RESET}").strip()
+            if token == "" or token == current:
+                print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
+            else:
+                config["discord_bot_token"] = token
+                save_config(config)
+                print(f"{Colors.GREEN}Discord bot token updated.{Colors.RESET}")
+
+        elif choice == '5':
+            _clear()
+            print("Selection: 5")
+            current = str(config.get("discord_channel_id", "") or "")
+            cid = input(f"{Colors.CYAN}Enter Discord channel ID: {Colors.RESET}").strip()
+            if cid == "" or cid == current:
+                print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
+            else:
+                config["discord_channel_id"] = cid
+                save_config(config)
+                print(f"{Colors.GREEN}Discord channel ID updated.{Colors.RESET}")
+
+        print(f"{Colors.CYAN}--------------------------------------------------{Colors.RESET}")
+
 async def main():
+    ensure_console_size(cols=134, lines=30, buffer_lines=5000)
     config = load_config()
     if config is None:
         pause_on_error()
@@ -389,18 +638,25 @@ async def main():
         config["download_path"] = download_path.replace('\\', '/')
         save_config(config)
 
-    print(f"\n{Colors.CYAN}====================================================")
-    print(f"               Welcome to Universal  ")
-    print(f"====================================================")
-
+    header_lines = [   
+        r" ____ ___      .__                                  .__   ",
+        r"|    |   \____ |__|__  __ ___________  ___________  |  |  ",
+        r"|    |   /    \|  \  \/ // __ \_  __ \/  ___/\__  \ |  |  ",
+        r"|    |  /   |  \  |\   /\  ___/|  | \/\___ \  / __ \|  |__",
+        r"|______/|___|  /__| \_/  \___  >__|  /____  >(____  /____/",
+        r"             \/              \/           \/      \/      ",
+    ]
+    for l in header_lines:
+        print(f"{Colors.CYAN}{l}{Colors.RESET}")
+        
     if not check_ffmpeg():
         print(f"{Colors.YELLOW}WARNING: FFmpeg not found. Video and audio conversion may fail.{Colors.RESET}")
         print("Please install FFmpeg to use all features.")
 
     print(f"\n{Colors.CYAN}Configuration:{Colors.RESET}")
     print(f"  {Colors.YELLOW}- Videos will be saved to '{config['download_path']}'.{Colors.RESET}")
-    print(f"  {Colors.YELLOW}- Gofile Token is set: {'Yes' if config.get('gofile_Account_Token') else 'No'}.{Colors.RESET}")
-    print(f"  {Colors.YELLOW}- Gofile Folder ID is set: {'Yes' if config.get('gofile_folder_id') else 'No'}.{Colors.RESET}")
+    print(f"  {Colors.YELLOW}- Gofile Token is set: {'Yes' if config.get('gofile_Account_Token') else 'No'}{Colors.RESET}")
+    print(f"  {Colors.YELLOW}- Gofile Folder ID is set: {'Yes' if config.get('gofile_folder_id') else 'No'}{Colors.RESET}")
 
     while True:
         links_to_download = []
@@ -410,6 +666,7 @@ async def main():
   {Colors.CYAN}[1] Enter a link{Colors.RESET}
   {Colors.CYAN}[2] From a .txt file{Colors.RESET}
   {Colors.CYAN}[3] From a Discord channel{Colors.RESET}
+  {Colors.CYAN}[S] Settings{Colors.RESET}
 {Colors.CYAN}----------------------------------------------------{Colors.RESET}
 {Colors.CYAN}Selection: {Colors.RESET}""").lower()
 
@@ -417,30 +674,76 @@ async def main():
             user_input = input(f"{Colors.CYAN}enter the link\n{Colors.RESET}").strip()
             if user_input:
                 links_to_download.extend(dedupe_and_clean([user_input]))
+            else:
+                print(f"{Colors.RED}No link provided.{Colors.RESET}")
+                for i in range(4, 0, -1):
+                    sys.stdout.write(f"\rReturning to main menu in {i} seconds...   ")
+                    sys.stdout.flush()
+                    time.sleep(1)
+                print("")
+                try:
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                except Exception:
+                    pass
+                for l in header_lines:
+                    print(f"{Colors.CYAN}{l}{Colors.RESET}")
+                continue
         elif user_choice == '2':
-            while True:
-                file_name = input(f"{Colors.CYAN}Please enter the name of the .txt file: {Colors.RESET}")
-                if os.path.exists(file_name):
-                    collected = []
-                    with open(file_name, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            url = line.strip()
-                            if url and url.startswith(("http://", "https://")):
-                                collected.append(url)
-                    links_to_download = dedupe_and_clean(collected)
-                    if not links_to_download:
-                        print(f"{Colors.RED}The file '{file_name}' was found, but it contains no valid links.{Colors.RESET}")
-                        continue
-                    else:
-                        print(f"{Colors.GREEN}Successfully found {len(links_to_download)} links in '{file_name}'.{Colors.RESET}")
-                        break
-                else:
-                    print(f"{Colors.RED}Error: The file '{file_name}' was not found.{Colors.RESET}")
-                    continue
+            file_name = input(f"{Colors.CYAN}Please enter the name of the .txt file: {Colors.RESET}").strip()
+            if (not file_name) or (not file_name.lower().endswith(".txt")) or (not os.path.exists(file_name)):
+                print(f"{Colors.RED}No .txt file with that name was found.{Colors.RESET}")
+                for i in range(4, 0, -1):
+                    sys.stdout.write(f"\rReturning to main menu in {i} seconds...   ")
+                    sys.stdout.flush()
+                    time.sleep(1)
+                print("")
+                try:
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                except Exception:
+                    pass
+                for l in header_lines:
+                    print(f"{Colors.CYAN}{l}{Colors.RESET}")
+                continue
+            collected = []
+            with open(file_name, 'r', encoding='utf-8') as f:
+                for line in f:
+                    url = line.strip()
+                    if url and url.startswith(("http://", "https://")):
+                        collected.append(url)
+            links_to_download = dedupe_and_clean(collected)
+            if not links_to_download:
+                print(f"{Colors.RED}The file '{file_name}' was found, but it contains no valid links.{Colors.RESET}")
+                for i in range(4, 0, -1):
+                    sys.stdout.write(f"\rReturning to main menu in {i} seconds...   ")
+                    sys.stdout.flush()
+                    time.sleep(1)
+                print("")
+                try:
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                except Exception:
+                    pass
+                for l in header_lines:
+                    print(f"{Colors.CYAN}{l}{Colors.RESET}")
+                continue
+            else: 
+                print(f"{Colors.GREEN}Successfully found {len(links_to_download)} links in '{file_name}'.{Colors.RESET}")
         elif user_choice == '3':
             links_to_download = await get_links_from_discord(config)
+        elif user_choice == 's':
+            try:
+                os.system('cls' if os.name == 'nt' else 'clear')
+            except Exception:
+                pass
+            open_settings_menu(config)
+            try:
+                os.system('cls' if os.name == 'nt' else 'clear')
+            except Exception:
+                pass
+            for l in header_lines:
+                print(f"{Colors.CYAN}{l}{Colors.RESET}")
+            continue
         else:
-            print(f"{Colors.RED}Invalid selection. Please enter '1', '2' or '3'.{Colors.RESET}")
+            print(f"{Colors.RED}Invalid selection. Please enter '1', '2', '3' or 's'{Colors.RESET}")
             continue
 
         if not links_to_download:
@@ -468,7 +771,6 @@ async def main():
                     print(f"{Colors.RED}Folder ID cannot be empty. Please enter a valid ID.{Colors.RESET}")
 
         await process_links(links_to_download, config, upload_to_gofile_enabled)
-
     time.sleep(2)
 
 if __name__ == "__main__":
