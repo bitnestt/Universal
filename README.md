@@ -21,12 +21,14 @@
 
 <details>
   <summary><strong>Screenshots</strong></summary>
-  <p align="center">
-    <img alt="Screenshot 1" src="assets/screenshot/screen1.png" width="800">
-  </p>
-  <p align="center">
-    <img alt="Screenshot 2" src="assets/screenshot/screen2.png" width="800">
-  </p>
+
+  <table>
+    <tr>
+      <td><img alt="Screenshot 1" src="assets/screenshot/screen1.png" width="100%"></td>
+      <td><img alt="Screenshot 2" src="assets/screenshot/screen2.png" width="100%"></td>
+    </tr>
+  </table>
+
 </details>
 </div>
 
@@ -132,8 +134,11 @@ The tool does **not** store, share, or transfer your cookie data.
 It only uses them to download age-restricted videos.
 
 ---
-
+<div align="center">
+ 
 If you find any buggs or inconsistencies, please report them in detail under “Issues”
 I welcome any ideas you may have, Please post them under “Discussions – Ideas.” 
-
+ 
 [![Ko-fi](https://www.ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/bitnestt)
+
+</div>
