@@ -1,8 +1,34 @@
-# Universal Video Downloader Tool
+<div align="center">
+<pre>
+ ____ ___      .__                                  .__   
+|    |   \____ |__|__  __ ___________  ___________  |  |  
+|    |   /    \|  \  \/ // __ \_  __ \/  ___/\__  \ |  |  
+|    |  /   |  \  |\   /\  ___/|  | \/\___ \  / __ \|  |__
+|______/|___|  /__| \_/  \___  >__|  /____  >(____  /____/
+             \/              \/           \/      \/      
+</pre>
+<p align="center">
+  <a href="https://github.com/bitnestt/Universal/stargazers">
+    <img alt="Stars" src="https://img.shields.io/github/stars/bitnestt/Universal?style=flat&color=30363d&labelColor=0d1117&logo=github">
+  </a>
+  <a href="https://github.com/bitnestt/Universal/issues">
+    <img alt="Issues" src="https://img.shields.io/github/issues/bitnestt/Universal?style=flat&color=30363d&labelColor=0d1117">
+  </a>
+  <a href="https://github.com/bitnestt/Universal/blob/main/LICENSE">
+    <img alt="License" src="https://img.shields.io/github/license/bitnestt/Universal?style=flat&color=30363d&labelColor=0d1117">
+  </a>
+</p>
 
-This is a versatile command-line video downloader based on [yt-dlp](https://ffmpeg.org/download.html).
-
----
+<details>
+  <summary><strong>Screenshots</strong></summary>
+  <p align="center">
+    <img alt="Screenshot 1" src="assets/screenshot1.png" width="800">
+  </p>
+  <p align="center">
+    <img alt="Screenshot 2" src="assets/screenshot2.png" width="800">
+  </p>
+</details>
+</div>
 
 ## Features 🚀
 
