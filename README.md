@@ -22,10 +22,10 @@
 <details>
   <summary><strong>Screenshots</strong></summary>
   <p align="center">
-    <img alt="Screenshot 1" src="assets/screenshot1.png" width="800">
+    <img alt="Screenshot 1" src="assets/screenshot/screen1.png" width="800">
   </p>
   <p align="center">
-    <img alt="Screenshot 2" src="assets/screenshot2.png" width="800">
+    <img alt="Screenshot 2" src="assets/screenshot/screen2.png" width="800">
   </p>
 </details>
 </div>
