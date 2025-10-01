@@ -122,17 +122,16 @@ The easiest way to get your cookies is by using a browser extension like **Cooki
 
 That’s it! The next time you run the tool, it will automatically detect and use the cookies for your downloads.
 
+---
+
+<div align="center">
+  
 ### Important Note on Privacy 🔒
 The cookies are processed **locally on your computer**.  
 The tool does **not** store, share, or transfer your cookie data.  
 It only uses them to download age-restricted videos.
 
----
-<div align="center">
- 
-If you find any buggs or inconsistencies, please report them in detail under “Issues”
-I welcome any ideas you may have, Please post them under “Discussions – Ideas.” 
- 
+
 [![Ko-fi](https://www.ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/bitnestt)
 
 </div>
