@@ -140,8 +140,20 @@ def _draw_update_box_left(title, description, date_human=None):
     import textwrap
     if description:
         for line in description.splitlines():
-            for sub in textwrap.wrap(line, width=box_width):
-                print(sub)
+            if line == "":
+                print("")
+                continue
+            wrapped = textwrap.wrap(
+                line,
+                width=box_width,
+                replace_whitespace=False,
+                drop_whitespace=False
+            )
+            if not wrapped:
+                print(line)
+            else:
+                for sub in wrapped:
+                    print(sub)
     else:
         print("No description provided.")
 
@@ -168,16 +180,49 @@ async def show_update_notice_if_any():
     _draw_update_box_left(title, desc, date_human=date_h)
 
     print("[Press Enter to continue]   [O] Open commit link")
-    choice = input("> ").strip().lower()
-    if choice == "o" and info.get("html_url"):
-        confirm = input("Open the commit in your default browser? (y/n): ").strip().lower()
-        if confirm == "y":
+    try:
+        import msvcrt
+        sys.stdout.write("> ")
+        sys.stdout.flush()
+        while True:
+            ch = msvcrt.getwch()
+            if ch in ("\r", "\n"):
+                break
+            if ch and ch.lower() == "o" and info.get("html_url"):
+                try:
+                    webbrowser.open(info["html_url"])
+                except Exception as e:
+                    print(f"Could not open browser: {e}")
+    except Exception:
+        sys.stdout.write("> ")
+        sys.stdout.flush()
+        try:
+            import termios, tty
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            tty.setraw(fd)
             try:
-                webbrowser.open(info["html_url"])
-                print("Opening browser...")
-            except Exception as e:
-                print(f"Could not open browser: {e}")
-        input("Press Enter to continue...")
+                while True:
+                    ch = sys.stdin.read(1)
+                    if ch in ("\r", "\n"):
+                        break
+                    if ch and ch.lower() == "o" and info.get("html_url"):
+                        try:
+                            webbrowser.open(info["html_url"])
+                        except Exception as e:
+                            print(f"Could not open browser: {e}")
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        except Exception:
+            while True:
+                choice = input().strip().lower()
+                if choice == "":
+                    break
+                if choice == "o" and info.get("html_url"):
+                    try:
+                        webbrowser.open(info["html_url"])
+                    except Exception as e:
+                        print(f"Could not open browser: {e}")
 
     _write_last_seen_sha(latest)
     _clear_screen()
@@ -725,7 +770,7 @@ def open_settings_menu(config):
             ("Gofile Account Token", str(config.get('gofile_Account_Token', '') or ''), "YES" if str(config.get('gofile_Account_Token', '')).strip() else "NO "),
             ("Gofile Folder ID", str(config.get('gofile_folder_id', '') or ''), "YES" if str(config.get('gofile_folder_id', '')).strip() else "NO "),
             ("Discord bot token", str(config.get('discord_bot_token', '') or ''), "YES" if str(config.get('discord_bot_token', '')).strip() else "NO "),
-            ("Discord channel ID", str(config.get('discord_channel_id', '') or ''), "YES" if str(config.get('discord_channel_id', '')).strip() else "NO "),
+            ("Discord channel ID", str(config.get('discord_channel_id', '')) or '', "YES" if str(config.get('discord_channel_id', '')).strip() else "NO "),
         ]
         _clear()
         print(f"{Colors.CYAN}------------------- Settings --------------------{Colors.RESET}")
@@ -1026,7 +1071,6 @@ async def main():
                     print(f"{Colors.CYAN}Insert another link or press Enter to return...{Colors.RESET}")
                     user_input = input().strip()
                 if user_input == "":
-                    # Return to main menu
                     render_header(config)
                     break
 
