@@ -1,11 +1,11 @@
 <div align="center">
-  <pre style="white-space:pre-wrap; text-align:center; display:inline-block; max-width:95%; overflow:auto; line-height:1; font-family:monospace; margin:0 0 16px 0;"> 
- ____ ___       __                                   __   
-|    |   \____ |__|__  __ ___________  ___________  |  |  
-|    |   /    \|  \  \/ // __ \_  __ \/  ___/\__  \ |  |  
-|    |  /   |  \  |\   /\  ___/|  | \/\___ \  / __ \|  |__
-|______/|___|  /__| \_/  \___  >__|  /____  >(____  /____/
-                   \/              \/           \/      \/             
+  <pre style="white-space:pre-wrap; text-align:center; display:inline-block; max-width:95%; overflow:auto; line-height:1; font-family:monospace; margin:0 0 16px 0;">                                                                                            
+ _|    _|  _|      _|  _|_|_|  _|      _|  _|_|_|_|  _|_|_|      _|_|_|    _|_|    _|        
+ _|    _|  _|_|    _|    _|    _|      _|  _|        _|    _|  _|        _|    _|  _|        
+ _|    _|  _|  _|  _|    _|    _|      _|  _|_|_|    _|_|_|      _|_|    _|_|_|_|  _|        
+ _|    _|  _|    _|_|    _|      _|  _|    _|        _|    _|        _|  _|    _|  _|        
+   _|_|    _|      _|  _|_|_|      _|      _|_|_|_|  _|    _|  _|_|_|    _|    _|  _|_|_|_|  
+                                                                                                                                                                                                  
   </pre>
 <details>
   <summary><strong>Screenshots</strong></summary>
