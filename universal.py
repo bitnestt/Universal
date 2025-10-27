@@ -1,30 +1,25 @@
-# universal - v1.3.0
+# universal - v1.3.2
 import sys
 import subprocess
 import os
 import json
-import tempfile
 import time
 from pathlib import Path
 import asyncio
 import re
 import string
-import shutil
 import datetime
 import aiohttp
 import webbrowser
 
 try:
-    import requests
     import yt_dlp
     import discord
-    import cloudscraper
-    import aiohttp
     from yt_dlp.utils import DownloadError, ExtractorError
 except ImportError:
     print("Missing libraries will be installed...")
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "yt-dlp", "discord.py", "cloudscraper", "aiohttp"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp", "discord.py", "aiohttp"])
         print("Installation complete. Please restart the script.")
     except Exception as e:
         print(f"Error installing dependencies: {e}")
@@ -259,8 +254,6 @@ def load_config():
     config_file_path = "config.json"
     default_config = {
         "download_path": "",
-        "gofile_Account_Token": "",
-        "gofile_folder_id": "",
         "discord_bot_token": "",
         "discord_channel_id": "",
         "max_download_rate_bps": 0
@@ -295,42 +288,6 @@ def save_config(config):
             json.dump(config, f, indent=2)
     except Exception as e:
         print(f"{Colors.RED}Failed to save config: {e}{Colors.RESET}")
-
-def get_gofile_server():
-    try:
-        response = requests.get("https://api.gofile.io/servers")
-        response.raise_for_status()
-        servers = response.json()
-        if servers['status'] == 'ok' and servers['data']['servers']:
-            return servers['data']['servers'][0]['name']
-    except requests.exceptions.RequestException as e:
-        print(f"{Colors.RED}Failed to get Gofile server: {e}{Colors.RESET}")
-        return None
-    return None
-
-def upload_to_gofile(file_path, server, account_token=None, folder_id=None):
-    try:
-        with open(file_path, 'rb') as f:
-            files = {'file': f}
-            url = f"https://{server}.gofile.io/uploadFile"
-            data = {}
-            if account_token:
-                data['token'] = account_token
-            if folder_id:
-                data['folderId'] = folder_id
-
-            response = requests.post(url, files=files, data=data)
-            response.raise_for_status()
-
-            upload_data = response.json()
-            if upload_data['status'] == 'ok':
-                return True, "Successfully uploaded to Gofile."
-            else:
-                return False, f"Gofile upload failed: {upload_data.get('message', 'Unknown error')}"
-    except requests.exceptions.RequestException as e:
-        return False, f"Error uploading to Gofile: {e}"
-    except Exception as e:
-        return False, f"An unexpected error occurred during upload: {e}"
 
 def sanitize_filename(text):
     valid_chars = f"-_.() {string.ascii_letters}{string.digits}"
@@ -522,8 +479,8 @@ def get_today_stats():
     return count, total
 #---------------Daily stats(end)---------------
 
-def download_universal_video(url, config, upload_to_gofile_enabled, gofile_server=None):
-    download_target_dir = tempfile.mkdtemp() if upload_to_gofile_enabled else config["download_path"]
+def download_universal_video(url, config):
+    download_target_dir = config["download_path"]
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     generic_cookie_file = os.path.join(script_dir, "cookies.txt")
@@ -550,8 +507,6 @@ def download_universal_video(url, config, upload_to_gofile_enabled, gofile_serve
             ext = info_dict.get("ext", "mp4")
             duration_seconds = int(info_dict.get("duration") or 0)
     except Exception as e:
-        if upload_to_gofile_enabled and os.path.isdir(download_target_dir):
-            shutil.rmtree(download_target_dir, ignore_errors=True)
         return False, f"Could not fetch video info: {e}", 0, 0
 
     safe_title = sanitize_filename(title)
@@ -582,6 +537,24 @@ def download_universal_video(url, config, upload_to_gofile_enabled, gofile_serve
             except:
                 pass
             prog['len'] = 0
+
+    def _friendly_protection_message(raw_msg: str) -> str:
+        raw = (raw_msg or "").strip()
+        lower = raw.lower()
+        if "cloudflare" in lower:
+            return ("Blocked by site protection (e.g., Cloudflare). "
+                    "The site is preventing downloads without a valid session/cookies. "
+                    "Tip: supply a cookies.txt from your browser, sign in if needed, or try again later.")
+        if "403" in lower:
+            return ("Access denied (HTTP 403). The site blocked this request. "
+                    "Tip: provide cookies.txt / login, or wait and retry.")
+        if "429" in lower:
+            return ("Too many requests (HTTP 429). The site rate-limited the request. "
+                    "Tip: wait a bit or lower the download rate and retry.")
+        if "401" in lower:
+            return ("Unauthorized (HTTP 401). The site requires authentication. "
+                    "Tip: add cookies.txt or login credentials.")
+        return raw or "Download failed due to site protection or an unknown network error."
 
     def progress_hook(d):
         status = d.get('status')
@@ -623,6 +596,8 @@ def download_universal_video(url, config, upload_to_gofile_enabled, gofile_serve
     }
     if rate_bps > 0:
         ydl_opts['ratelimit'] = rate_bps
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    generic_cookie_file = os.path.join(script_dir, "cookies.txt")
     if os.path.exists(generic_cookie_file):
         ydl_opts['cookiefile'] = generic_cookie_file
 
@@ -634,10 +609,8 @@ def download_universal_video(url, config, upload_to_gofile_enabled, gofile_serve
                 return p
         return base_root + "." + ext
 
-    def attempt_download(url_dl, session=None):
+    def attempt_download(url_dl):
         opts = ydl_opts.copy()
-        if session:
-            opts['http_session'] = session
         start_time = time.time()
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -654,44 +627,21 @@ def download_universal_video(url, config, upload_to_gofile_enabled, gofile_serve
             return True, final_effective, "", file_size, download_duration
         except DownloadError as e:
             clear_progress()
-            if "Cloudflare" in str(e) or "403" in str(e):
-                return False, None, "cloudflare_error", 0, 0
-            return False, None, str(e), 0, 0
+            msg = _friendly_protection_message(str(e))
+            return False, None, msg, 0, 0
         except ExtractorError as e:
             clear_progress()
-            return False, None, f"Extractor Error: {str(e)}", 0, 0
+            msg = _friendly_protection_message(str(e))
+            return False, None, f"{msg}", 0, 0
         except Exception as e:
             clear_progress()
-            return False, None, f"An unexpected error occurred: {type(e).__name__} - {e}", 0, 0
+            return False, None, f"Unexpected error: {type(e).__name__} - {e}", 0, 0
 
     success, final_path_real, error_message, file_size, _download_time = attempt_download(url)
 
-    if not success and error_message == "cloudflare_error":
-        try:
-            session = cloudscraper.create_scraper()
-            success, final_path_real, error_message, file_size, _download_time = attempt_download(url, session)
-        except Exception as e:
-            if upload_to_gofile_enabled and os.path.isdir(download_target_dir):
-                shutil.rmtree(download_target_dir, ignore_errors=True)
-            return False, f"An unexpected error occurred during bypass: {type(e).__name__} - {e}", 0, duration_seconds
-
     if success:
-        if upload_to_gofile_enabled:
-            success_up, message = upload_to_gofile(final_path_real, gofile_server, config.get("gofile_Account_Token"), config.get("gofile_folder_id"))
-            try:
-                os.remove(final_path_real)
-            except Exception as e:
-                print(f"{Colors.YELLOW}Warning: Could not remove file {final_path_real}: {e}{Colors.RESET}")
-            try:
-                shutil.rmtree(os.path.dirname(final_path_real), ignore_errors=True)
-            except Exception as e:
-                print(f"{Colors.YELLOW}Warning: Could not remove temp dir: {e}{Colors.RESET}")
-            return success_up, "", file_size, duration_seconds
-        else:
-            return True, "", file_size, duration_seconds
+        return True, "", file_size, duration_seconds
     else:
-        if upload_to_gofile_enabled and os.path.isdir(download_target_dir):
-            shutil.rmtree(download_target_dir, ignore_errors=True)
         return False, error_message, file_size, duration_seconds
 
 async def get_links_from_discord(config):
@@ -765,19 +715,16 @@ def open_settings_menu(config):
         rate_bps_local = int(config.get("max_download_rate_bps") or 0)
         rate_label_colored = f"{Colors.GREEN}{_rate_label(rate_bps_local)}{Colors.RESET}"
         entries = [
-            ("Bandwidth limit", rate_label_colored, "    "),
-            ("Download path", str(config.get('download_path', '') or ''), "    "),
-            ("Gofile Account Token", str(config.get('gofile_Account_Token', '') or ''), "YES" if str(config.get('gofile_Account_Token', '')).strip() else "NO "),
-            ("Gofile Folder ID", str(config.get('gofile_folder_id', '') or ''), "YES" if str(config.get('gofile_folder_id', '')).strip() else "NO "),
-            ("Discord bot token", str(config.get('discord_bot_token', '') or ''), "YES" if str(config.get('discord_bot_token', '')).strip() else "NO "),
-            ("Discord channel ID", str(config.get('discord_channel_id', '')) or '', "YES" if str(config.get('discord_channel_id', '')).strip() else "NO "),
+            ("Bandwidth limit", rate_label_colored),
+            ("Download path", str(config.get('download_path', '') or '')),
+            ("Discord bot token", str(config.get('discord_bot_token', '') or '')),
+            ("Discord channel ID", str(config.get('discord_channel_id', '') or '')),
         ]
         _clear()
         print(f"{Colors.CYAN}------------------- Settings --------------------{Colors.RESET}")
-        label_width = max((len(label) for label, _, _ in entries), default=0)
-        for label, value, flag in entries:
-            prefix = f"{Colors.GREEN}YES{Colors.RESET}" if flag.strip() == "YES" else (f"{Colors.RED}NO {Colors.RESET}" if flag.strip() == "NO" else "    ")
-            print(f"  {prefix} - {label:<{label_width}} : {value}")
+        label_width = max((len(label) for label, _ in entries), default=0)
+        for label, value in entries:
+            print(f"  - {label:<{label_width}} : {value}")
         print(f"{Colors.CYAN}--------------------------------------------------{Colors.RESET}")
 
     entries = []
@@ -787,11 +734,9 @@ def open_settings_menu(config):
     while True:
         print("Choose an option:")
         print("  [1] Change download path")
-        print("  [2] Set/Change Gofile Account Token")
-        print("  [3] Set/Change Gofile Folder ID")
-        print("  [4] Set/Change Discord bot token")
-        print("  [5] Set/Change Discord channel ID")
-        print("  [6] Global bandwidth limit")
+        print("  [2] Set/Change Discord bot token")
+        print("  [3] Set/Change Discord channel ID")
+        print("  [4] Global bandwidth limit")
         print("  [0] Back to menu")
         print(f"{Colors.CYAN}--------------------------------------------------{Colors.RESET}")
         choice = input(f"{Colors.CYAN}Selection: {Colors.RESET}").strip().lower()
@@ -799,7 +744,7 @@ def open_settings_menu(config):
         if choice == '0':
             break
 
-        if choice not in {'1','2','3','4','5','6'}:
+        if choice not in {'1','2','3','4'}:
             _clear()
             print(f"{Colors.RED}Invalid selection.{Colors.RESET}")
             _render()
@@ -827,32 +772,6 @@ def open_settings_menu(config):
         elif choice == '2':
             _clear()
             print("Selection: 2")
-            current = str(config.get("gofile_Account_Token", "") or "")
-            token = input(f"{Colors.CYAN}Enter Gofile Account Token: {Colors.RESET}").strip()
-            if token == "" or token == current:
-                print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
-            else:
-                config["gofile_Account_Token"] = token
-                save_config(config)
-                print(f"{Colors.GREEN}Gofile Account Token updated.{Colors.RESET}")
-            _render()
-
-        elif choice == '3':
-            _clear()
-            print("Selection: 3")
-            current = str(config.get("gofile_folder_id", "") or "")
-            fid = input(f"{Colors.CYAN}Enter Gofile Folder ID: {Colors.RESET}").strip()
-            if fid == "" or fid == current:
-                print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
-            else:
-                config["gofile_folder_id"] = fid
-                save_config(config)
-                print(f"{Colors.GREEN}Gofile Folder ID updated.{Colors.RESET}")
-            _render()
-
-        elif choice == '4':
-            _clear()
-            print("Selection: 4")
             current = str(config.get("discord_bot_token", "") or "")
             token = input(f"{Colors.CYAN}Enter Discord bot token: {Colors.RESET}").strip()
             if token == "" or token == current:
@@ -863,9 +782,9 @@ def open_settings_menu(config):
                 print(f"{Colors.GREEN}Discord bot token updated.{Colors.RESET}")
             _render()
 
-        elif choice == '5':
+        elif choice == '3':
             _clear()
-            print("Selection: 5")
+            print("Selection: 3")
             current = str(config.get("discord_channel_id", "") or "")
             cid = input(f"{Colors.CYAN}Enter Discord channel ID: {Colors.RESET}").strip()
             if cid == "" or cid == current:
@@ -876,9 +795,9 @@ def open_settings_menu(config):
                 print(f"{Colors.GREEN}Discord channel ID updated.{Colors.RESET}")
             _render()
 
-        elif choice == '6':
+        elif choice == '4':
             _clear()
-            print("Selection: 6")
+            print("Selection: 4")
             print("Enter global bandwidth limit in MB/s (0 = Unlimited). Leave empty to cancel.")
             raw = input(f"{Colors.CYAN}MB/s: {Colors.RESET}").strip()
             if raw == "":
@@ -903,23 +822,16 @@ def open_settings_menu(config):
                 print(f"{Colors.RED}Invalid number.{Colors.RESET}")
             _render()
 
-async def process_links(links, config, upload_to_gofile_enabled):
+async def process_links(links, config):
     total_links = len(links)
     if total_links == 0:
         return
-
-    gofile_server = None
-    if upload_to_gofile_enabled:
-        gofile_server = get_gofile_server()
-        if not gofile_server:
-            print(f"{Colors.RED}Could not find a Gofile server. Cannot upload.{Colors.RESET}")
-            upload_to_gofile_enabled = False
 
     for idx, raw_url in enumerate(links, start=1):
         url = clean_url(raw_url)
         try:
             success, message, file_size, video_duration = await asyncio.to_thread(
-                download_universal_video, url, config, upload_to_gofile_enabled, gofile_server
+                download_universal_video, url, config
             )
         except Exception as e:
             print(f"{Colors.RED}Download error: {e}{Colors.RESET}")
@@ -937,6 +849,8 @@ async def process_links(links, config, upload_to_gofile_enabled):
                 pass
         else:
             print(f"{Colors.RED}    - Download failed ({idx}/{total_links}){Colors.RESET}")
+            if message:
+                print(f"{Colors.RED}      - Error: {message}{Colors.RESET}")
             print(f"{Colors.YELLOW}      - Link: {url}{Colors.RESET}")
 
 def is_valid_download_path(path_str):
@@ -963,34 +877,13 @@ def render_header(config):
         print(f"{Colors.CYAN}{l}{Colors.RESET}")
     try:
         count_today, size_today = get_today_stats()
-        stats_line = f"Daily Downloads Today: {count_today}    |    Total Size Today: {format_bytes(size_today)}"
+        stats_line = f"Daily Downloads, Today: {count_today}  |  Total Size, Today: {format_bytes(size_today)}"
         print(stats_line)
     except Exception:
         pass
     if not check_ffmpeg():
         print(f"{Colors.YELLOW}WARNING: FFmpeg not found. Video and audio conversion may fail.{Colors.RESET}")
         print("Please install FFmpeg to use all features.")
-
-def countdown_blocking(seconds, prefix):
-    try:
-        import msvcrt
-    except ImportError:
-        msvcrt = None
-    for i in range(seconds, 0, -1):
-        sys.stdout.write(f"\r{prefix} {i} seconds...   ")
-        sys.stdout.flush()
-        t_end = time.time() + 1
-        while time.time() < t_end:
-            if msvcrt and msvcrt.kbhit():
-                try:
-                    msvcrt.getwch()
-                except Exception:
-                    try:
-                        msvcrt.getch()
-                    except Exception:
-                        pass
-            time.sleep(0.01)
-    print("")
 
 def select_txt_file():
     try:
@@ -1056,13 +949,12 @@ async def main():
         valid_choices = {'1', '2', '3', 's'}
         if user_choice not in valid_choices:
             print(f"{Colors.RED}Invalid selection. Please enter '1', '2', '3' or 's'{Colors.RESET}")
-            countdown_blocking(4, "Returning to menu in")
+            input(f"{Colors.CYAN}Press Enter to return...{Colors.RESET}")
             render_header(config)
             continue
 
         if user_choice == '1':
             first_loop = True
-            upload_to_gofile_enabled = None
             while True:
                 if first_loop:
                     print(f"{Colors.CYAN}enter the link{Colors.RESET}")
@@ -1079,29 +971,7 @@ async def main():
                     print(f"{Colors.RED}No link provided.{Colors.RESET}")
                     continue
 
-                if upload_to_gofile_enabled is None:
-                    print(f"\n{Colors.YELLOW}Would you like to save the videos locally (1) or upload them to Gofile (2)?{Colors.RESET}")
-                    upload_choice = input(f"{Colors.CYAN}Selection: {Colors.RESET}").lower()
-                    upload_to_gofile_enabled = upload_choice == '2'
-
-                    if upload_to_gofile_enabled:
-                        while not config.get("gofile_Account_Token"):
-                            api_key = input(f"{Colors.CYAN}Please enter your Gofile Account Token (This is mandatory for uploads): {Colors.RESET}")
-                            if api_key.strip():
-                                config["gofile_Account_Token"] = api_key.strip()
-                                save_config(config)
-                            else:
-                                print(f"{Colors.RED}Gofile Account Token cannot be empty. Please enter a valid key.{Colors.RESET}")
-
-                        while not config.get("gofile_folder_id"):
-                            folder_id = input(f"{Colors.CYAN}Please enter the destination folder ID (This is mandatory for uploads): {Colors.RESET}")
-                            if folder_id.strip():
-                                config["gofile_folder_id"] = folder_id.strip()
-                                save_config(config)
-                            else:
-                                print(f"{Colors.RED}Folder ID cannot be empty. Please enter a valid ID.{Colors.RESET}")
-
-                await process_links(links_to_download, config, upload_to_gofile_enabled)
+                await process_links(links_to_download, config)
                 first_loop = False
             continue
 
@@ -1119,15 +989,113 @@ async def main():
             links_to_download = dedupe_and_clean(collected)
             if not links_to_download:
                 print(f"{Colors.RED}The file '{file_name}' was found, but it contains no valid links.{Colors.RESET}")
-                countdown_blocking(4, "Returning to menu in")
+                input(f"{Colors.CYAN}Press Enter to return...{Colors.RESET}")
                 render_header(config)
                 continue
             else:
                 print(f"{Colors.GREEN}Successfully found {len(links_to_download)} links in '{file_name}'.{Colors.RESET}")
+                print(f"{Colors.CYAN}Press Enter to start download or press B to return...{Colors.RESET}", end="", flush=True)
+                aborted = False
+                decided = False
+                try:
+                    import msvcrt
+                    while True:
+                        ch = msvcrt.getwch()
+                        if ch in ("\r", "\n"):
+                            print()
+                            decided = True
+                            break
+                        if ch and ch.lower() == 'b':
+                            print()
+                            aborted = True
+                            break
+                except Exception:
+                    pass
+                if not decided and not aborted:
+                    try:
+                        import termios, tty
+                        fd = sys.stdin.fileno()
+                        old = termios.tcgetattr(fd)
+                        tty.setraw(fd)
+                        try:
+                            while True:
+                                ch = sys.stdin.read(1)
+                                if ch in ("\r", "\n"):
+                                    print()
+                                    decided = True
+                                    break
+                                if ch and ch.lower() == 'b':
+                                    print()
+                                    aborted = True
+                                    break
+                        finally:
+                            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    except Exception:
+                        print()
+                        while True:
+                            choice = input().strip().lower()
+                            if choice == "":
+                                decided = True
+                                break
+                            if choice == "b":
+                                aborted = True
+                                break
+                if aborted:
+                    render_header(config)
+                    continue
 
         elif user_choice == '3':
             links_to_download = await get_links_from_discord(config)
-
+            if links_to_download:
+                print(f"{Colors.CYAN}Press Enter to start download or press B to return...{Colors.RESET}", end="", flush=True)
+                aborted = False
+                decided = False
+                try:
+                    import msvcrt
+                    while True:
+                        ch = msvcrt.getwch()
+                        if ch in ("\r", "\n"):
+                            print()
+                            decided = True
+                            break
+                        if ch and ch.lower() == 'b':
+                            print()
+                            aborted = True
+                            break
+                except Exception:
+                    pass
+                if not decided and not aborted:
+                    try:
+                        import termios, tty
+                        fd = sys.stdin.fileno()
+                        old = termios.tcgetattr(fd)
+                        tty.setraw(fd)
+                        try:
+                            while True:
+                                ch = sys.stdin.read(1)
+                                if ch in ("\r", "\n"):
+                                    print()
+                                    decided = True
+                                    break
+                                if ch and ch.lower() == 'b':
+                                    print()
+                                    aborted = True
+                                    break
+                        finally:
+                            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    except Exception:
+                        print()
+                        while True:
+                            choice = input().strip().lower()
+                            if choice == "":
+                                decided = True
+                                break
+                            if choice == "b":
+                                aborted = True
+                                break
+                if aborted:
+                    render_header(config)
+                    continue
         else:
             open_settings_menu(config)
             render_header(config)
@@ -1136,33 +1104,12 @@ async def main():
         if not links_to_download:
             continue
 
-        print(f"\n{Colors.YELLOW}Would you like to save the videos locally (1) or upload them to Gofile (2)?{Colors.RESET}")
-        upload_choice = input(f"{Colors.CYAN}Selection: {Colors.RESET}").lower()
-        upload_to_gofile_enabled = upload_choice == '2'
+        await process_links(links_to_download, config)
 
-        if upload_to_gofile_enabled:
-            while not config.get("gofile_Account_Token"):
-                api_key = input(f"{Colors.CYAN}Please enter your Gofile Account Token (This is mandatory for uploads): {Colors.RESET}")
-                if api_key.strip():
-                    config["gofile_Account_Token"] = api_key.strip()
-                    save_config(config)
-                else:
-                    print(f"{Colors.RED}Gofile Account Token cannot be empty. Please enter a valid key.{Colors.RESET}")
-
-            while not config.get("gofile_folder_id"):
-                folder_id = input(f"{Colors.CYAN}Please enter the destination folder ID (This is mandatory for uploads): {Colors.RESET}")
-                if folder_id.strip():
-                    config["gofile_folder_id"] = folder_id.strip()
-                    save_config(config)
-                else:
-                    print(f"{Colors.RED}Folder ID cannot be empty. Please enter a valid ID.{Colors.RESET}")
-
-        await process_links(links_to_download, config, upload_to_gofile_enabled)
-
-        input(f"\n{Colors.CYAN}Press Enter to return to menu...{Colors.RESET}")
+        input(f"\n{Colors.CYAN}Press Enter to return...{Colors.RESET}")
         render_header(config)
 
-    time.sleep(2)
+    time.sleep(0.2)
 
 if __name__ == "__main__":
     asyncio.run(main())
