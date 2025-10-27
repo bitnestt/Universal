@@ -11,11 +11,11 @@
   <summary><strong>Screenshots</strong></summary>
  
   <p align="center">
-    <img alt="Screenshot 1" src="screenshots/screen2.png" style="max-width:1000px; width:90%; border:1px solid #444; border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,0.2); margin-bottom:16px;">
+    <img alt="Screenshot 1" src="assets/screenshots/screen1.png" style="max-width:1000px; width:90%; border:1px solid #444; border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,0.2); margin-bottom:16px;">
   </p>
 
   <p align="center">
-    <img alt="Screenshot 2" src="screenshots/screen1.png" style="max-width:1000px; width:90%; border:1px solid #444; border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,0.2);">
+    <img alt="Screenshot 2" src="assets/screenshots/screen2.png" style="max-width:1000px; width:90%; border:1px solid #444; border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,0.2);">
   </p>
   
 </details>
