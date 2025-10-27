@@ -24,28 +24,24 @@
 ## Features 🚀
 
 - **Video Download:** The tool can download videos from any website supported by yt-dlp.
-- **Gofile Upload:** Automatically upload videos to your Gofile Folder. (it will take longer)
 - **Flexible Input:** You can manually enter links, import them from a `.txt` file, or retrieve them via a Discord channel.
-- **Secure Configuration:** All settings are securely saved in the `config.json` file.
 - **Daily Download Statistics:** The tool records how many videos were downloaded today and the total combined size, resetting at local midnight (supports all time zones).
 - **Update Check:** When launched, the tool uses the GitHub API to check whether there is a new commit **specifically** for `universal.py`
-- **Download Speed:** You can set a maximum download speed, 0 means unlimited.
+- **Download Speed:** You can set a maximum download speed.
 
 ---
 
 ## Prerequisites 🛠️
 
 - **Python**: You need Python 3.9 or higher to run the script.
-- you need always the newest version of [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+- the newest version of [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - **FFmpeg**: This is required for converting video formats.  
   A warning will be displayed if it is not found.  
   It is highly recommended to download FFmpeg [here](https://ffmpeg.org/download.html) or place the `ffmpeg` file in the same folder as the script.
 
-- **Required Python Libraries**: The script will automatically install all necessary libraries upon the first run. These include:
-  - [aiohttp](https://docs.aiohttp.org/) 
-  - [cloudscraper](https://github.com/VeNoMouS/cloudscraper)  
-  - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-  - [requests](https://github.com/psf/requests) 
+- **Required Libraries**: The script will automatically install all necessary libraries upon the first run. These include:
+  - [aiohttp](https://docs.aiohttp.org/)  
+  - [yt-dlp](https://github.com/yt-dlp/yt-dlp) 
   - [discord.py](https://github.com/Rapptz/discord.py)
   
   The tool uses these libraries to perform its core functions. I accept no responsibility for any problems that may arise from their use.
@@ -56,20 +52,13 @@
 
 All settings are saved in the `config.json` file, which is automatically created on the first run of the script. Here are the key options:
 
-- **download_path**: The save path for downloaded videos. If left empty, you will be prompted to enter a path on the first run.  
-- **gofile_Account Token**: Your personal Account Token for Gofile.  
-- **gofile_folder_id**: The ID of the destination folder in your Gofile account.  
+- **download_path**: The save path for downloaded videos. If left empty, you will be prompted to enter a path on the first run.    
 - **discord_bot_token**: Your Discord bot's token.  
 - **discord_channel_id**: The ID of the Discord channel from which links should be read.  
 
 ## How to Obtain the Required Information
-
-### 1. Gofile Account Token & Folder ID
-
-- **Account Token**: Log in to gofile and scroll down to the bottom of My Profile. 
-- **Folder ID**: my files, then the three dots of the respective folder, then properties.
   
-### 2. Discord Bot Token & Channel ID
+### 1. Discord Bot Token & Channel ID
 
 For the Discord integration, you will need to create a bot that can read messages.
 
