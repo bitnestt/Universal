@@ -1,4 +1,4 @@
-# universal - v1.3.2
+# universal - v1.3.7
 import sys
 import subprocess
 import os
@@ -11,11 +11,12 @@ import string
 import datetime
 import aiohttp
 import webbrowser
+import errno
 
 try:
     import yt_dlp
     import discord
-    from yt_dlp.utils import DownloadError, ExtractorError
+    from yt_dlp.utils import DownloadError, ExtractorError, PostProcessingError
 except ImportError:
     print("Missing libraries will be installed...")
     try:
@@ -243,6 +244,12 @@ def ensure_console_size(cols=140, lines=50, buffer_lines=5000):
 def pause_on_error():
     input(f"\n{Colors.CYAN}[Press Enter to exit...]{Colors.RESET}")
 
+def wait_enter():
+    try:
+        input(f"{Colors.CYAN}Press Enter to continue...{Colors.RESET}")
+    except Exception:
+        pass
+
 def check_ffmpeg():
     try:
         subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True, text=True)
@@ -256,7 +263,8 @@ def load_config():
         "download_path": "",
         "discord_bot_token": "",
         "discord_channel_id": "",
-        "max_download_rate_bps": 0
+        "max_download_rate_bps": 0,
+        "audio_only": False
     }
     if os.path.exists(config_file_path):
         try:
@@ -394,7 +402,6 @@ def _rate_label(bps: int) -> str:
         return f"{int(mb)} MB/s"
     return f"{mb:.2f} MB/s"
 
-#---------------Daily stats(start)---------------
 STATS_PATH = os.path.join(os.path.dirname(__file__), ".universal_stats.json")
 STATS_RETENTION_DAYS = 14
 
@@ -477,7 +484,29 @@ def get_today_stats():
         except Exception:
             continue
     return count, total
-#---------------Daily stats(end)---------------
+
+def _friendly_protection_message(raw_msg: str) -> str:
+    raw = (raw_msg or "").strip()
+    lower = raw.lower()
+    if "cloudflare" in lower:
+        return "Blocked by site protection (e.g., Cloudflare). Provide cookies or try again later."
+    if "403" in lower:
+        return "Access denied (HTTP 403). Provide cookies/login or retry later."
+    if "429" in lower:
+        return "Too many requests (HTTP 429). You are rate-limited. Wait and retry."
+    if "401" in lower:
+        return "Unauthorized (HTTP 401). Authentication required (cookies/login)."
+    if "404" in lower or "not found" in lower:
+        return "Resource not found (HTTP 404). Check the link."
+    if "502" in lower or "503" in lower or "504" in lower or "5xx" in lower:
+        return "Server error (HTTP 5xx). Retry later."
+    if "timed out" in lower or "timeout" in lower:
+        return "Request timed out. Check your connection and retry."
+    if "ssl" in lower or "certificate" in lower:
+        return "SSL/TLS error (certificate/connection). Check network/proxy."
+    if "name or service not known" in lower or "temporary failure in name resolution" in lower or "getaddrinfo" in lower or "dns" in lower:
+        return "DNS resolution failed. Check your internet or DNS resolver."
+    return raw or "Download failed due to a network/site error."
 
 def download_universal_video(url, config):
     download_target_dir = config["download_path"]
@@ -538,24 +567,6 @@ def download_universal_video(url, config):
                 pass
             prog['len'] = 0
 
-    def _friendly_protection_message(raw_msg: str) -> str:
-        raw = (raw_msg or "").strip()
-        lower = raw.lower()
-        if "cloudflare" in lower:
-            return ("Blocked by site protection (e.g., Cloudflare). "
-                    "The site is preventing downloads without a valid session/cookies. "
-                    "Tip: supply a cookies.txt from your browser, sign in if needed, or try again later.")
-        if "403" in lower:
-            return ("Access denied (HTTP 403). The site blocked this request. "
-                    "Tip: provide cookies.txt / login, or wait and retry.")
-        if "429" in lower:
-            return ("Too many requests (HTTP 429). The site rate-limited the request. "
-                    "Tip: wait a bit or lower the download rate and retry.")
-        if "401" in lower:
-            return ("Unauthorized (HTTP 401). The site requires authentication. "
-                    "Tip: add cookies.txt or login credentials.")
-        return raw or "Download failed due to site protection or an unknown network error."
-
     def progress_hook(d):
         status = d.get('status')
         if status == 'downloading':
@@ -580,13 +591,29 @@ def download_universal_video(url, config):
         elif status == 'finished':
             clear_progress()
 
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': base_no_ext + ".%(ext)s",
-        'postprocessors': [{
+    audio_only = bool(config.get("audio_only"))
+
+    if audio_only and not check_ffmpeg():
+        return False, "FFmpeg is required for audio-only downloads and embedding thumbnails, but it was not found.", 0, 0
+
+    if not audio_only:
+        ydl_postprocessors = [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4',
-        }],
+        }]
+        ydl_format = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+    else:
+        ydl_postprocessors = [
+            {'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'},
+            {'key': 'FFmpegThumbnailsConvertor', 'format': 'jpg'},
+            {'key': 'EmbedThumbnail'}
+        ]
+        ydl_format = 'bestaudio/best'
+
+    ydl_opts = {
+        'format': ydl_format,
+        'outtmpl': base_no_ext + ".%(ext)s",
+        'postprocessors': ydl_postprocessors,
         'quiet': True,
         'no_warnings': True,
         'noprogress': True,
@@ -594,6 +621,8 @@ def download_universal_video(url, config):
         'extractor_args': {'generic': ['impersonate']},
         'progress_hooks': [progress_hook],
     }
+    if audio_only:
+        ydl_opts['writethumbnail'] = True
     if rate_bps > 0:
         ydl_opts['ratelimit'] = rate_bps
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -609,6 +638,15 @@ def download_universal_video(url, config):
                 return p
         return base_root + "." + ext
 
+    def cleanup_thumbnails(base_root):
+        for e in ("jpg", "jpeg", "png", "webp"):
+            p = f"{base_root}.{e}"
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
     def attempt_download(url_dl):
         opts = ydl_opts.copy()
         start_time = time.time()
@@ -618,6 +656,10 @@ def download_universal_video(url, config):
             end_time = time.time()
             clear_progress()
             final_effective = find_final_output(base_no_ext)
+            if not os.path.exists(final_effective):
+                return False, None, "Output file not found (conversion failed).", 0, 0
+            if audio_only:
+                cleanup_thumbnails(base_no_ext)
             download_duration = end_time - start_time
             file_size = os.path.getsize(final_effective)
             try:
@@ -625,6 +667,26 @@ def download_universal_video(url, config):
             except Exception:
                 pass
             return True, final_effective, "", file_size, download_duration
+        except PostProcessingError as e:
+            clear_progress()
+            final_effective = find_final_output(base_no_ext)
+            if audio_only and os.path.exists(final_effective):
+                if audio_only:
+                    cleanup_thumbnails(base_no_ext)
+                end_time = time.time()
+                download_duration = end_time - start_time
+                file_size = os.path.getsize(final_effective)
+                try:
+                    record_download_stat(file_size)
+                except Exception:
+                    pass
+                return True, final_effective, "", file_size, download_duration
+            return False, None, "Post-processing failed (FFmpeg missing/broken).", 0, 0
+        except OSError as e:
+            clear_progress()
+            if getattr(e, "errno", None) == errno.ENOSPC:
+                return False, None, "No space left on device.", 0, 0
+            return False, None, f"File system error: {e}", 0, 0
         except DownloadError as e:
             clear_progress()
             msg = _friendly_protection_message(str(e))
@@ -632,7 +694,7 @@ def download_universal_video(url, config):
         except ExtractorError as e:
             clear_progress()
             msg = _friendly_protection_message(str(e))
-            return False, None, f"{msg}", 0, 0
+            return False, None, msg, 0, 0
         except Exception as e:
             clear_progress()
             return False, None, f"Unexpected error: {type(e).__name__} - {e}", 0, 0
@@ -657,6 +719,7 @@ async def get_links_from_discord(config):
 
     if not config.get("discord_bot_token") or not config.get("discord_channel_id"):
         print(f"{Colors.RED}Discord bot token or channel ID is missing. The function cannot be executed.{Colors.RESET}")
+        wait_enter()
         return []
 
     intents = discord.Intents.default()
@@ -670,12 +733,21 @@ async def get_links_from_discord(config):
     async def on_ready():
         print(f'{Colors.CYAN}Logged in as bot "{client.user}".{Colors.RESET}')
         try:
-            channel_id = int(config["discord_channel_id"])
-            channel = client.get_channel(channel_id)
-            if not channel:
-                print(f"{Colors.RED}Channel with ID {channel_id} could not be found.{Colors.RESET}")
+            try:
+                channel_id = int(config["discord_channel_id"])
+            except ValueError:
+                print(f"{Colors.RED}Invalid channel ID. It must be numeric.{Colors.RESET}")
                 client.cleaned_links = []
                 await client.close()
+                wait_enter()
+                return
+
+            channel = client.get_channel(channel_id)
+            if not channel:
+                print(f"{Colors.RED}Channel with ID {channel_id} not found or bot has no access.{Colors.RESET}")
+                client.cleaned_links = []
+                await client.close()
+                wait_enter()
                 return
 
             print(f"{Colors.YELLOW}Reading messages from channel '{channel.name}'...{Colors.RESET}")
@@ -685,20 +757,40 @@ async def get_links_from_discord(config):
                     raw_links.extend(found)
 
             client.cleaned_links = dedupe_and_clean(raw_links)
-            print(f" {Colors.GREEN}{len(client.cleaned_links)} links found on Discord.{Colors.RESET}")
+            if not client.cleaned_links:
+                print(f"{Colors.YELLOW}No links found in the channel.{Colors.RESET}")
+                wait_enter()
             await client.close()
+        except discord.Forbidden:
+            print(f"{Colors.RED}No permission to access the channel. Check bot roles and channel visibility.{Colors.RESET}")
+            client.cleaned_links = []
+            await client.close()
+            wait_enter()
+        except discord.NotFound:
+            print(f"{Colors.RED}Discord resource not found (channel/server). Check the ID and permissions.{Colors.RESET}")
+            client.cleaned_links = []
+            await client.close()
+            wait_enter()
+        except discord.HTTPException as e:
+            print(f"{Colors.RED}Discord API error: {e}{Colors.RESET}")
+            client.cleaned_links = []
+            await client.close()
+            wait_enter()
         except Exception as e:
             print(f"{Colors.RED}Error accessing Discord: {e}{Colors.RESET}")
             client.cleaned_links = []
             await client.close()
+            wait_enter()
 
     try:
         await client.start(config["discord_bot_token"])
     except discord.errors.LoginFailure:
         print(f"{Colors.RED}The Discord token is invalid. Please check it in config.json and restart the tool.{Colors.RESET}")
+        wait_enter()
         return []
     except Exception as e:
         print(f"{Colors.RED}An unexpected error occurred while connecting to Discord: {e}{Colors.RESET}")
+        wait_enter()
         return []
 
     return getattr(client, "cleaned_links", [])
@@ -714,11 +806,14 @@ def open_settings_menu(config):
         nonlocal entries, label_width
         rate_bps_local = int(config.get("max_download_rate_bps") or 0)
         rate_label_colored = f"{Colors.GREEN}{_rate_label(rate_bps_local)}{Colors.RESET}"
+        audio_only_local = bool(config.get("audio_only"))
+        audio_only_label = f"{Colors.GREEN}On{Colors.RESET}" if audio_only_local else f"{Colors.YELLOW}Off{Colors.RESET}"
         entries = [
             ("Bandwidth limit", rate_label_colored),
             ("Download path", str(config.get('download_path', '') or '')),
             ("Discord bot token", str(config.get('discord_bot_token', '') or '')),
             ("Discord channel ID", str(config.get('discord_channel_id', '') or '')),
+            ("Only audio", audio_only_label),
         ]
         _clear()
         print(f"{Colors.CYAN}------------------- Settings --------------------{Colors.RESET}")
@@ -737,6 +832,7 @@ def open_settings_menu(config):
         print("  [2] Set/Change Discord bot token")
         print("  [3] Set/Change Discord channel ID")
         print("  [4] Global bandwidth limit")
+        print("  [5] Toggle Only audio")
         print("  [0] Back to menu")
         print(f"{Colors.CYAN}--------------------------------------------------{Colors.RESET}")
         choice = input(f"{Colors.CYAN}Selection: {Colors.RESET}").strip().lower()
@@ -744,7 +840,7 @@ def open_settings_menu(config):
         if choice == '0':
             break
 
-        if choice not in {'1','2','3','4'}:
+        if choice not in {'1','2','3','4','5'}:
             _clear()
             print(f"{Colors.RED}Invalid selection.{Colors.RESET}")
             _render()
@@ -790,9 +886,12 @@ def open_settings_menu(config):
             if cid == "" or cid == current:
                 print(f"{Colors.YELLOW}No changes were made.{Colors.RESET}")
             else:
-                config["discord_channel_id"] = cid
-                save_config(config)
-                print(f"{Colors.GREEN}Discord channel ID updated.{Colors.RESET}")
+                if not cid.isdigit():
+                    print(f"{Colors.RED}Invalid channel ID. It must be numeric.{Colors.RESET}")
+                else:
+                    config["discord_channel_id"] = cid
+                    save_config(config)
+                    print(f"{Colors.GREEN}Discord channel ID updated.{Colors.RESET}")
             _render()
 
         elif choice == '4':
@@ -820,6 +919,16 @@ def open_settings_menu(config):
                     print(f"{Colors.GREEN}Bandwidth limit updated to {_rate_label(new_bps)}.{Colors.RESET}")
             except ValueError:
                 print(f"{Colors.RED}Invalid number.{Colors.RESET}")
+            _render()
+
+        elif choice == '5':
+            _clear()
+            print("Selection: 5")
+            current = bool(config.get("audio_only"))
+            config["audio_only"] = not current
+            save_config(config)
+            state = "On" if config["audio_only"] else "Off"
+            print(f"{Colors.GREEN}Only audio is now: {state}{Colors.RESET}")
             _render()
 
 async def process_links(links, config):
@@ -866,18 +975,18 @@ def is_valid_download_path(path_str):
 def render_header(config):
     _clear_screen()
     header_lines = [   
-        r" ____ ___       __                                   __   ",
-        r"|    |   \____ |__|__  __ ___________  ___________  |  |  ",
-        r"|    |   /    \|  \  \/ // __ \_  __ \/  ___/\__  \ |  |  ",
-        r"|    |  /   |  \  |\   /\  ___/|  | \/\___ \  / __ \|  |__",
-        r"|______/|___|  /__| \_/  \___  >__|  /____  >(____  /____/",
-        r"             \/              \/           \/      \/      ",
+                                                       
+r" _____ _____ _____ _____ _____ _____ _____ _____ __",    
+r"|  |  |   | |     |  |  |   __| __  |   __|  _  |  |",   
+r"|  |  | | | |-   -|  |  |   __|    -|__   |     |  |__",
+r"|_____|_|___|_____|\___/|_____|__|__|_____|__|__|_____|",
+                                                       
     ]
     for l in header_lines:
         print(f"{Colors.CYAN}{l}{Colors.RESET}")
     try:
         count_today, size_today = get_today_stats()
-        stats_line = f"Daily Downloads, Today: {count_today}  |  Total Size, Today: {format_bytes(size_today)}"
+        stats_line = f"Daily Downloads, Today: {count_today} | Total Size, Today: {format_bytes(size_today)}"
         print(stats_line)
     except Exception:
         pass
@@ -897,13 +1006,24 @@ def select_txt_file():
         )
         root.destroy()
         if not file_path:
+            print(f"{Colors.YELLOW}No file selected.{Colors.RESET}")
             return None
-        return file_path if file_path.lower().endswith(".txt") else None
+        if not file_path.lower().endswith(".txt"):
+            print(f"{Colors.RED}Invalid file selected. Please choose a .txt file.{Colors.RESET}")
+            return None
+        return file_path
     except Exception:
         try:
             fp = input(f"{Colors.CYAN}Please enter the name of the .txt file: {Colors.RESET}").strip()
-            if fp and fp.lower().endswith(".txt") and os.path.exists(fp):
+            if not fp:
+                print(f"{Colors.YELLOW}No file provided.{Colors.RESET}")
+                return None
+            if not fp.lower().endswith(".txt"):
+                print(f"{Colors.RED}Invalid file. Please choose a .txt file.{Colors.RESET}")
+                return None
+            if os.path.exists(fp):
                 return fp
+            print(f"{Colors.RED}File not found: {fp}{Colors.RESET}")
             return None
         except Exception:
             return None
@@ -957,7 +1077,7 @@ async def main():
             first_loop = True
             while True:
                 if first_loop:
-                    print(f"{Colors.CYAN}enter the link{Colors.RESET}")
+                    print(f"{Colors.CYAN}Enter the link{Colors.RESET}")
                     user_input = input().strip()
                 else:
                     print(f"{Colors.CYAN}Insert another link or press Enter to return...{Colors.RESET}")
@@ -968,7 +1088,7 @@ async def main():
 
                 links_to_download = dedupe_and_clean([user_input])
                 if not links_to_download:
-                    print(f"{Colors.RED}No link provided.{Colors.RESET}")
+                    print(f"{Colors.RED}Invalid link. It must start with http:// or https://{Colors.RESET}")
                     continue
 
                 await process_links(links_to_download, config)
@@ -978,17 +1098,25 @@ async def main():
         elif user_choice == '2':
             file_name = select_txt_file()
             if (not file_name) or (not os.path.exists(file_name)):
+                print(f"{Colors.YELLOW}No valid .txt file selected or file not found.{Colors.RESET}")
+                wait_enter()
                 render_header(config)
                 continue
             collected = []
-            with open(file_name, 'r', encoding='utf-8') as f:
-                for line in f:
-                    url = line.strip()
-                    if url and url.startswith(("http://", "https://")):
-                        collected.append(url)
+            try:
+                with open(file_name, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        url = line.strip()
+                        if url and url.startswith(("http://", "https://")):
+                            collected.append(url)
+            except Exception as e:
+                print(f"{Colors.RED}Error reading file: {e}{Colors.RESET}")
+                wait_enter()
+                render_header(config)
+                continue
             links_to_download = dedupe_and_clean(collected)
             if not links_to_download:
-                print(f"{Colors.RED}The file '{file_name}' was found, but it contains no valid links.{Colors.RESET}")
+                print(f"{Colors.RED}The file '{file_name}' contains no valid links.{Colors.RESET}")
                 input(f"{Colors.CYAN}Press Enter to return...{Colors.RESET}")
                 render_header(config)
                 continue
@@ -1096,6 +1224,11 @@ async def main():
                 if aborted:
                     render_header(config)
                     continue
+            else:
+                print(f"{Colors.YELLOW}No links found or Discord access failed.{Colors.RESET}")
+                wait_enter()
+                render_header(config)
+                continue
         else:
             open_settings_menu(config)
             render_header(config)
