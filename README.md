@@ -1,124 +1,153 @@
 <div align="center">
-  <pre style="white-space:pre-wrap; text-align:center; display:inline-block; max-width:95%; overflow:auto; line-height:1; font-family:monospace; margin:0 0 16px 0;">
- ____ _____ _____ _____ _____ _____ _____ _____ __
-|  |  |   | |     |  |  |   __| __  |   __|  _  |  |
-|  |  | | | |-   -|  |  |   __|    -|__   |     |  |__
-|_____|_|___|_____|\___/|_____|__|__|_____|__|__|_____|
-  </pre>
-<details>
-  <summary><strong>Screenshots</strong></summary>
- 
-  <p align="center">
-    <img alt="Screenshot 1" src="assets/screenshots/screen1.png" style="max-width:1000px; width:90%; border:1px solid #444; border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,0.2); margin-bottom:16px;">
-  </p>
-
-  <p align="center">
-    <img alt="Screenshot 2" src="assets/screenshots/screen2.png" style="max-width:1000px; width:90%; border:1px solid #444; border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,0.2);">
-  </p>
-  
+  <pre style="white-space:pre-wrap; text-align:center; display:inline-block; max-width:95%; overflow:auto; line-height:1; font-family:monospace; margin:0 0 16px 0;">                               
+ _______ _______ _______ ___ ___ _______ ______ _______ _______ _____   
+|   |   |    |  |_     _|   |   |    ___|   __ \     __|   _   |     |_ 
+|   |   |       |_|   |_|   |   |    ___|      <__     |       |       |
+|_______|__|____|_______|\_____/|_______|___|__|_______|___|___|_______|
 </details>
 </div>
-
-## Features 🚀
-
-- **Video Download:** The tool can download videos from any website supported by yt-dlp.
-- **Flexible Input:** You can manually enter links, import them from a `.txt` file, or retrieve them via a Discord channel.
-- **Daily Download Statistics:** The tool records how many videos were downloaded today and the total combined size, resetting at local midnight (supports all time zones).
-- **Update Check:** When launched, the tool uses the GitHub API to check whether there is a new commit **specifically** for `universal.py`
-- **Download Speed:** You can set a maximum download speed.
-
----
-
-## Prerequisites 🛠️
-
-- **Python**: You need Python 3.9 or higher to run the script.
-- the newest version of [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- **FFmpeg**: This is required for converting video formats.  
-  A warning will be displayed if it is not found.  
-  It is highly recommended to download FFmpeg [here](https://ffmpeg.org/download.html) or place the `ffmpeg` file in the same folder as the script.
-
-- **Required Libraries**: The script will automatically install all necessary libraries upon the first run. These include:
-  - [aiohttp](https://docs.aiohttp.org/)  
-  - [yt-dlp](https://github.com/yt-dlp/yt-dlp) 
-  - [discord.py](https://github.com/Rapptz/discord.py)
   
-  The tool uses these libraries to perform its core functions. I accept no responsibility for any problems that may arise from their use.
+## Highlights
 
----
+- Interactive menu
+  - [1] Enter a single link
+  - [2] Load links from a .txt file
+  - [3] Collect links from a Discord channel
+  - [S] Settings
+- Audio‑only mode (global toggle)
+  - “Only audio” in Settings
+  - Downloads all inputs as MP3
+  - Embeds the source thumbnail as MP3 cover art (if available)
+  - The thumbnail file is NOT kept on disk; it’s embedded into the MP3 and then removed
+  - If no thumbnail is available, the MP3 is still produced (without cover)
+- Video downloads (default mode)
+- Discord integration
+  - Use a bot token and channel ID to scrape links from a channel’s message history
+- .txt file source
+  - One URL per line
+- Global bandwidth limit
+- Daily stats (header shows count and total bytes for today)
+- cookies.txt support
+  - If a `cookies.txt` sits next to the script, it will be used automatically (helps with protected sites, e.g., 403)
 
-## Setup and Configuration ⚙️
+## Requirements
 
-All settings are saved in the `config.json` file, which is automatically created on the first run of the script. Here are the key options:
+- Python 3.9+
+- FFmpeg
+  - Required for audio conversion and cover embedding
+- The script will auto‑install Python deps on first run if missing:
+  - yt‑dlp, discord.py, aiohttp
 
-- **download_path**: The save path for downloaded videos. If left empty, you will be prompted to enter a path on the first run.    
-- **discord_bot_token**: Your Discord bot's token.  
-- **discord_channel_id**: The ID of the Discord channel from which links should be read.  
+## Quick start
 
-## How to Obtain the Required Information
-  
-### 1. Discord Bot Token & Channel ID
+- Install FFmpeg and ensure `ffmpeg` is in your PATH
+- Download `universal.py`
+- Run:
+  - Windows: `py universal.py`
+  - macOS/Linux: `python3 universal.py`
+- On first launch, set a valid download path
+- Use the menu to download by link, by .txt, or via Discord
 
-For the Discord integration, you will need to create a bot that can read messages.
+## Settings
 
-#### Bot Creation:
+Toggle and configure under [S] Settings:
+- Download path
+- Discord bot token
+- Discord channel ID
+- Bandwidth limit (MB/s, 0 = unlimited)
+- Only audio (On/Off)
 
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).  
-2. Click on **"New Application"** and give your application a name.  
-3. Navigate to **"Bot"** in the left menu and click on **"Add Bot"**.  
-4. Under **Privileged Gateway Intents**, you must enable the **"Message Content Intent"** so the bot can read messages, And of course you have to add the bot to your server.
+Settings are stored in `config.json`:
+```json
+{
+  "download_path": "",
+  "discord_bot_token": "",
+  "discord_channel_id": "",
+  "max_download_rate_bps": 0,
+  "audio_only": false
+}
+```
 
-#### Bot Token:
+Notes:
+- Bandwidth limit is stored as bytes per second (bps) internally.
+- If `cookies.txt` exists next to the script, it will be used automatically.
 
-- Your bot token will be displayed in the **"Bot"** section under the bot's username.  
-- Click on **"Reset Token"** and then **"Copy"** to copy it.  
-- ⚠️ **Warning**: Never share this token.  
+## Audio‑only mode and cover art
 
-#### Channel ID:
+- When “Only audio” is On:
+  - The best audio stream is downloaded and converted to MP3.
+  - If a thumbnail is available, it’s embedded as cover art in the MP3.
+  - Temporary thumbnail files are cleaned up; nothing extra remains on disk.
+  - If no thumbnail is available, the MP3 is still produced without a cover.
+- FFmpeg is required for conversion and embedding; if missing, a clear error explains it.
 
-1. Open Discord and go to **User Settings > Advanced**. Enable **Developer Mode** there.  
-2. Right-click on the channel you want to retrieve links from and select **"Copy Channel ID"**.
+## Discord: how to collect links
 
----
+1. Create a Discord bot at the Developer Portal and copy the bot token.
+2. Invite the bot to your server with at least “Read Message History” for the target channel.
+3. In Settings, paste the bot token and enter the numeric channel ID.
+4. Choose menu option [3] to collect links from that channel (up to the recent history in scope).
 
-## Using Cookies for Restricted Videos 🍪
+Tip: If the bot can’t see the channel, grant it the necessary permissions or move it above role restrictions.
 
-This tool can use cookies to download restricted videos, By providing a `cookies.txt` file, The tool will automatically look for this file in the same folder where the `universal.py` script is located.
+## .txt file input
 
-### How to Export Your Cookies
+- Prepare a text file with one URL per line.
+- In the menu, choose [2], select the .txt file, confirm to start.
+- Invalid or duplicate lines are skipped automatically.
 
-The easiest way to get your cookies is by using a browser extension like **Cookies Editor** for Chrome, Firefox, Brave, Safari or Opera.
+## Error messages and behavior
 
-1. **Navigate to the Website**:  
-   Go to the website you want to download from (e.g., YouTube, a social media site, etc.) and make sure you are logged in.
+- Errors are printed in English with short guidance on how to fix the issue.
+- For non‑download contexts (Discord, file selection, setup), the app pauses with “Press Enter to continue…” so you can read the message.
+- For batch downloads, errors are shown inline per link so the batch can continue.
 
-2. **Open the Extension**:  
-   Click on the **Cookies Editor** icon in your browser's toolbar.
+Examples of messages:
+- Network/HTTP
+  - Access denied (HTTP 403). Provide cookies/login or retry later.
+  - Unauthorized (HTTP 401). Authentication required (cookies/login).
+  - Too many requests (HTTP 429). You are rate‑limited. Wait and retry.
+  - Resource not found (HTTP 404). Check the link.
+  - Server error (HTTP 5xx). Retry later.
+  - Request timed out. Check your connection and retry.
+  - SSL/TLS error (certificate/connection). Check network/proxy.
+  - DNS resolution failed. Check your internet or DNS resolver.
+- FFmpeg / Post‑processing / Filesystem
+  - FFmpeg is required for audio‑only downloads and embedding thumbnails, but it was not found.
+  - Post‑processing failed (FFmpeg missing/broken).  [If MP3 already exists, download is considered successful; the file may have no cover.]
+  - Output file not found (conversion failed).
+  - No space left on device.
+  - File system error: (details).
+  - Unexpected error: (Type) - (message).
+- Discord
+  - The Discord token is invalid. Please check it in config.json and restart the tool.
+  - Invalid channel ID. It must be numeric.
+  - Channel with ID (id) not found or bot has no access.
+  - No permission to access the channel. Check bot roles and channel visibility.
+  - Discord resource not found (channel/server). Check the ID and permissions.
+  - Discord API error: (details).
+  - No links found in the channel.
+- File selection / .txt
+  - No file selected.
+  - Invalid file selected. Please choose a .txt file.
+  - File not found: (path)
+  - Error reading file: (details)
+  - The file '(name)' contains no valid links.
+- Input validation
+  - Invalid link. It must start with http:// or https://
 
-3. **Export as Netscape**:  
-   In the bottom right corner of the extension's window, look for an **Export** button.  
-   Click it and select the **Netscape** format.  
-   This will copy the cookie data to your clipboard.
+## Stats
 
-4. **Create and Paste**:  
-   - In the same folder as your `universal.py` script, create a new text file and name it `cookies.txt`.  
-   - Open this new `cookies.txt` file and paste the copied Netscape cookie data into it.  
+- The header shows “Daily Downloads, Today: <count> | Total Size, Today: <human‑readable>”
+- Stats are kept for the last 14 days in `.universal_stats.json`
 
-5. **Save the File**:  
-   If you encounter problems downloading, re-enter the cookies in `cookies.txt` and make sure you are logged in on those websites you want to download videos from. 
-   Save and close the `cookies.txt` file.  
+## Update notice
 
-That’s it! The next time you run the tool, it will automatically detect and use the cookies for your downloads.
+- On start, the tool checks for the latest commit of `universal.py` in the repo and shows a brief box with the message.
+- Press Enter to continue or press “O” to open the commit link in your browser.
 
----
+## Tips
 
-<div align="center">
-  
-### Important Note on Privacy 🔒
-The cookies are processed **locally on your computer**.  
-The tool does **not** store, share, or transfer your cookie data.  
-It only uses them to download age-restricted videos.
-
-
-[![Ko-fi](https://www.ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/bitnestt)
-
-</div>
+- Use `cookies.txt` to handle sites behind protection or requiring login (403/Cloudflare). Export cookies from your browser and save them next to the script. (Netscape)
+- If you enable “Only audio”, ensure FFmpeg is installed.
+- If link extraction fails for a specific site, try providing cookies or reduce the bandwidth limit if you are rate‑limited.
