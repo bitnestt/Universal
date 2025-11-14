@@ -1,153 +1,340 @@
-<div align="center">
-  <pre style="white-space:pre-wrap; text-align:center; display:inline-block; max-width:95%; overflow:auto; line-height:1; font-family:monospace; margin:0 0 16px 0;">                               
- _______ _______ _______ ___ ___ _______ ______ _______ _______ _____   
-|   |   |    |  |_     _|   |   |    ___|   __ \     __|   _   |     |_ 
-|   |   |       |_|   |_|   |   |    ___|      <__     |       |       |
-|_______|__|____|_______|\_____/|_______|___|__|_______|___|___|_______|
-</details>
-</div>
-  
-## Highlights
+# Universal Downloader
 
-- Interactive menu
-  - [1] Enter a single link
-  - [2] Load links from a .txt file
-  - [3] Collect links from a Discord channel
-  - [S] Settings
-- Audio‑only mode (global toggle)
-  - “Only audio” in Settings
-  - Downloads all inputs as MP3
-  - Embeds the source thumbnail as MP3 cover art (if available)
-  - The thumbnail file is NOT kept on disk; it’s embedded into the MP3 and then removed
-  - If no thumbnail is available, the MP3 is still produced (without cover)
-- Video downloads (default mode)
-- Discord integration
-  - Use a bot token and channel ID to scrape links from a channel’s message history
-- .txt file source
-  - One URL per line
-- Global bandwidth limit
-- Daily stats (header shows count and total bytes for today)
-- cookies.txt support
-  - If a `cookies.txt` sits next to the script, it will be used automatically (helps with protected sites, e.g., 403)
+Universal is a console-based bulk downloader built around `yt-dlp` with optional Discord integration.  
+It is designed to reliably download videos or audio from a wide range of sites, with quality-of-life features like:
+
+- Flexible input sources (single link, text file, Discord channel)
+- Audio-only mode with optional MP3 cover embedding
+- Global bandwidth limiting
+- Multi-download (concurrent jobs) with per-fragment concurrency
+- Lightweight daily statistics and smart cookie handling
+- 
+---
+
+## Features
+
+- **Multi-source input**
+  - Enter a single URL directly in the console
+  - Load a list of URLs from a `.txt` file
+  - Fetch URLs from a Discord channel via bot
+
+- **Audio-only mode**
+  - Toggle *Only audio* to extract and download audio tracks
+  - Output as MP3 via `FFmpegExtractAudio`
+
+- **MP3 cover embedding (v1.5.0)**
+  - New setting: *MP3 cover embedding*
+  - When enabled, thumbnails are downloaded and embedded as album covers in MP3 files (audio-only mode)
+  - Uses `FFmpegThumbnailsConvertor` + `EmbedThumbnail`
+  - Automatically cleans up temporary thumbnail image files after successful conversion
+
+- **Global bandwidth limiting**
+  - Configure a global rate limit in MB/s
+  - Applies to all downloads via `yt-dlp`’s `ratelimit` option
+
+- **Multi-download & concurrency**
+  - Toggle *Multi download* to process multiple links concurrently
+  - Configure *Max concurrent downloads*
+  - Uses a semaphore and per-fragment concurrency with `concurrent_fragment_downloads`
+
+- **Discord integration**
+  - Connect a bot to a specific channel to read up to 1,000 recent messages
+  - Extracts and normalizes HTTP/HTTPS links
+  - Handles common permission and API errors gracefully
+
+- **Smart cookie handling**
+  - Reads `cookies.txt` from the script directory
+  - Supports both Netscape-format and common JSON exports (e.g. from browsers/extensions)
+  - Cleans and normalizes cookies into a temporary Netscape cookie file per run
+  - Automatically wires the cookie file into `yt-dlp`
+
+- **Robust error handling**
+  - Friendly messages for common HTTP and network errors (403, 404, 429, 5xx, DNS issues, SSL errors, timeouts)
+  - Clear feedback for disk space issues and file-system errors
+  - Graceful handling of `yt-dlp` extractor and post-processing errors
+
+- **Download statistics**
+  - Tracks per-download size in a lightweight JSON file (`.universal_stats.json`)
+  - Shows daily download count and total size in the header
+  - Automatically prunes old events beyond a retention window
+
+- **Cross-platform console UI**
+  - Text-based interface, no GUI dependencies required
+  - Windows console resizing (where supported) with safe fallbacks on other platforms
+  - Colored status messages for better readability
+
+---
 
 ## Requirements
 
-- Python 3.9+
-- FFmpeg
-  - Required for audio conversion and cover embedding
-- The script will auto‑install Python deps on first run if missing:
-  - yt‑dlp, discord.py, aiohttp
+- **Python**: 3.8 or newer is recommended
+- **Dependencies**:
+  - [`yt-dlp`](https://github.com/yt-dlp/yt-dlp)
+  - [`discord.py`](https://github.com/Rapptz/discord.py)
+  - [`aiohttp`](https://github.com/aio-libs/aiohttp)
+- **FFmpeg**:
+  - Required for video conversion, audio extraction, and MP3 cover embedding  
+  - Must be available in your system `PATH` as `ffmpeg`
 
-## Quick start
+If any of the Python dependencies are missing, `universal.py` will attempt to install them via `pip` on first run and then exit, so you can restart it afterwards.
 
-- Install FFmpeg and ensure `ffmpeg` is in your PATH
-- Download `universal.py`
-- Run:
-  - Windows: `py universal.py`
-  - macOS/Linux: `python3 universal.py`
-- On first launch, set a valid download path
-- Use the menu to download by link, by .txt, or via Discord
+---
+
+## Installation
+
+1. **Download the script**
+
+   Place `universal.py` in a directory of your choice.
+
+2. **Install Python 3**
+
+   Make sure `python` or `python3` is available in your shell.
+
+3. **Install FFmpeg**
+
+   - Windows: Use a static build from the FFmpeg website or a package manager (e.g. `chocolatey`, `scoop`)
+   - Linux: Use your distribution’s package manager (e.g. `apt install ffmpeg`, `pacman -S ffmpeg`)
+   - macOS: Use Homebrew (`brew install ffmpeg`)
+
+4. **Run once to bootstrap**
+
+   ```bash
+   python universal.py
+   ```
+
+   The script will:
+   - Install missing Python dependencies (if needed)
+   - Create a default `config.json` if it does not exist
+   - Ask you to provide a download path
+
+---
+
+## Configuration
+
+Configuration is stored in `config.json` in the same directory as `universal.py`.
+
+### Config keys
+
+- `download_path`  
+  Absolute or relative path where all downloaded files are stored.
+
+- `discord_bot_token`  
+  Discord bot token used to connect and read messages.
+
+- `discord_channel_id`  
+  Channel ID from which links will be read.
+
+- `max_download_rate_bps`  
+  Global download rate limit in bytes per second.
+  - `0` means unlimited
+  - Set via the *Global bandwidth limit* option in MB/s
+
+- `audio_only`  
+  when `true`, downloads audio-only and converts to MP3.
+
+- `multi_download`  
+  when `true`, enables concurrent downloads.
+
+- `max_concurrent_downloads`  
+  Integer (1–12); limits the number of concurrent downloads and influences fragment concurrency.
+
+- `embed_mp3_cover`  
+  when `true`, embeds the thumbnail as an MP3 cover in audio-only mode (v1.5.0).
+
+You can either edit `config.json` manually or use the in-script **Settings** menu.
+
+---
+
+## Usage
+
+### Starting the tool
+
+```bash
+python universal.py
+```
+
+On startup, the tool:
+
+- Ensures console size (Windows)
+- Checks for FFmpeg and prints a warning if not found
+- Loads and validates `config.json`
+- Ensures a valid, writable download path
+- Displays a header with cumulative stats for the current day
+
+### Main menu
+
+You will see:
+
+- `[1] Enter a link`  
+- `[2] From a .txt file`  
+- `[3] From a Discord channel`  
+- `[S] Settings`  
+
+#### 1. Enter a link
+
+- Type a direct URL and press Enter
+- After the first download, you can keep adding links or press Enter on an empty line to return to the main menu
+
+#### 2. From a .txt file
+
+- Select a `.txt` file (GUI file picker where available, otherwise enter the path manually)
+- Each non-empty line is treated as a potential URL
+- Invalid or empty lines are ignored
+- If at least one URL is valid, you will be prompted:
+  - Press Enter to start downloads
+  - Or `B` to go back
+
+#### 3. From a Discord channel
+
+- Ensures `discord_bot_token` and `discord_channel_id` are set
+- Connects a bot to the specified channel
+- Reads recent messages and extracts HTTP/HTTPS links
+- Normalizes and deduplicates all links
+- Prompts you to start or go back before downloading
+
+---
 
 ## Settings
 
-Toggle and configure under [S] Settings:
-- Download path
-- Discord bot token
-- Discord channel ID
-- Bandwidth limit (MB/s, 0 = unlimited)
-- Only audio (On/Off)
+Select `[S] Settings` from the main menu.
 
-Settings are stored in `config.json`:
-```json
-{
-  "download_path": "",
-  "discord_bot_token": "",
-  "discord_channel_id": "",
-  "max_download_rate_bps": 0,
-  "audio_only": false
-}
-```
+The settings menu shows the current configuration with colored values:
 
-Notes:
-- Bandwidth limit is stored as bytes per second (bps) internally.
-- If `cookies.txt` exists next to the script, it will be used automatically.
+- `On` in green
+- `Off` in yellow
 
-## Audio‑only mode and cover art
+### Options
 
-- When “Only audio” is On:
-  - The best audio stream is downloaded and converted to MP3.
-  - If a thumbnail is available, it’s embedded as cover art in the MP3.
-  - Temporary thumbnail files are cleaned up; nothing extra remains on disk.
-  - If no thumbnail is available, the MP3 is still produced without a cover.
-- FFmpeg is required for conversion and embedding; if missing, a clear error explains it.
+1. **Change download path**  
+   - Set or update the download directory
+   - Path is validated and normalized
 
-## Discord: how to collect links
+2. **Set/Change Discord bot token**  
+   - Configure the bot token for Discord integration
 
-1. Create a Discord bot at the Developer Portal and copy the bot token.
-2. Invite the bot to your server with at least “Read Message History” for the target channel.
-3. In Settings, paste the bot token and enter the numeric channel ID.
-4. Choose menu option [3] to collect links from that channel (up to the recent history in scope).
+3. **Set/Change Discord channel ID**  
+   - Configure the numeric channel ID used to fetch links
 
-Tip: If the bot can’t see the channel, grant it the necessary permissions or move it above role restrictions.
+4. **Global bandwidth limit**  
+   - Configure the limit in MB/s (0 = unlimited)
+   - Stored in `max_download_rate_bps` in bytes per second
 
-## .txt file input
+5. **Toggle Only audio**  
+   - Switch between full video downloads and audio-only MP3
+   - Requires FFmpeg
 
-- Prepare a text file with one URL per line.
-- In the menu, choose [2], select the .txt file, confirm to start.
-- Invalid or duplicate lines are skipped automatically.
+6. **Toggle MP3 cover embedding**  
+   - Controls `embed_mp3_cover`
+   - When `On` and `Only audio` is also `On`, the thumbnail is downloaded and embedded as an MP3 cover
 
-## Error messages and behavior
+7. **Toggle Multi download**  
+   - Enable or disable concurrent downloads
 
-- Errors are printed in English with short guidance on how to fix the issue.
-- For non‑download contexts (Discord, file selection, setup), the app pauses with “Press Enter to continue…” so you can read the message.
-- For batch downloads, errors are shown inline per link so the batch can continue.
+8. **Set Max concurrent downloads**  
+   - Set an integer between 1 and 12
+   - Controls how many downloads run in parallel
 
-Examples of messages:
-- Network/HTTP
-  - Access denied (HTTP 403). Provide cookies/login or retry later.
-  - Unauthorized (HTTP 401). Authentication required (cookies/login).
-  - Too many requests (HTTP 429). You are rate‑limited. Wait and retry.
-  - Resource not found (HTTP 404). Check the link.
-  - Server error (HTTP 5xx). Retry later.
-  - Request timed out. Check your connection and retry.
-  - SSL/TLS error (certificate/connection). Check network/proxy.
-  - DNS resolution failed. Check your internet or DNS resolver.
-- FFmpeg / Post‑processing / Filesystem
-  - FFmpeg is required for audio‑only downloads and embedding thumbnails, but it was not found.
-  - Post‑processing failed (FFmpeg missing/broken).  [If MP3 already exists, download is considered successful; the file may have no cover.]
-  - Output file not found (conversion failed).
-  - No space left on device.
-  - File system error: (details).
-  - Unexpected error: (Type) - (message).
-- Discord
-  - The Discord token is invalid. Please check it in config.json and restart the tool.
-  - Invalid channel ID. It must be numeric.
-  - Channel with ID (id) not found or bot has no access.
-  - No permission to access the channel. Check bot roles and channel visibility.
-  - Discord resource not found (channel/server). Check the ID and permissions.
-  - Discord API error: (details).
-  - No links found in the channel.
-- File selection / .txt
-  - No file selected.
-  - Invalid file selected. Please choose a .txt file.
-  - File not found: (path)
-  - Error reading file: (details)
-  - The file '(name)' contains no valid links.
-- Input validation
-  - Invalid link. It must start with http:// or https://
+---
 
-## Stats
+## MP3 Cover Embedding
 
-- The header shows “Daily Downloads, Today: <count> | Total Size, Today: <human‑readable>”
-- Stats are kept for the last 14 days in `.universal_stats.json`
+In version 1.5.0, MP3 cover embedding has been turned into a dedicated setting.
 
-## Update notice
+### Behavior
 
-- On start, the tool checks for the latest commit of `universal.py` in the repo and shows a brief box with the message.
-- Press Enter to continue or press “O” to open the commit link in your browser.
+- **Enabled** (`embed_mp3_cover = true`) and **Only audio** enabled:
+  - Downloads the best audio stream
+  - Downloads a thumbnail
+  - Converts audio to MP3 via FFmpeg
+  - Converts the thumbnail to JPEG
+  - Embeds the cover image into the MP3
+  - Cleans up temporary thumbnail files
 
-## Tips
+- **Disabled** (`embed_mp3_cover = false`) or **Only audio** disabled:
+  - No thumbnail download
+  - No album cover embedding
+  - Regular MP3 extraction only
 
-- Use `cookies.txt` to handle sites behind protection or requiring login (403/Cloudflare). Export cookies from your browser and save them next to the script. (Netscape)
-- If you enable “Only audio”, ensure FFmpeg is installed.
-- If link extraction fails for a specific site, try providing cookies or reduce the bandwidth limit if you are rate‑limited.
+This allows you to choose whether your audio-only downloads should include embedded cover art without affecting any other modes.
+
+---
+
+## Error Handling and Diagnostics
+
+Universal surfaces common issues in a readable way:
+
+- **Network/HTTP**
+  - 403, 404, 429, 5xx, DNS failures, SSL errors, and timeouts map to concise, human-readable messages
+
+- **File system**
+  - No space left on device
+  - Invalid or unwritable download paths
+
+- **FFmpeg**
+  - Clear message if FFmpeg is missing when audio-only or post-processing is required
+
+- **Discord**
+  - Invalid or missing token
+  - Invalid channel ID (must be numeric)
+  - Permission or visibility problems
+  - API errors from `discord.py`
+
+For unexpected exceptions, the script includes the Python error type and message to aid debugging.
+
+---
+
+## Stats and Privacy
+
+- Stats are stored locally in `.universal_stats.json`
+- Data points:
+  - Timestamp (UTC)
+  - Downloaded file size
+- Used only to show:
+  - Number of downloads today
+  - Total size of downloads today
+- Old entries are pruned after a retention period; there is no network transmission of these stats
+
+If you prefer, you can delete `.universal_stats.json` at any time; it will be recreated automatically.
+
+---
+
+## Updating
+
+Universal can notify you when `universal.py` in the configured GitHub repository has changed:
+
+- On startup, it queries the latest commit affecting `universal.py`
+- If a new commit exists compared to your last seen version, a small update box is displayed
+- You can:
+  - Press Enter to continue
+  - Press `O` to open the commit in your browser
+
+This mechanism is purely informational and does not auto-update your local file.
+
+---
+
+## Known Limitations
+
+- `ffmpeg` must be correctly installed and on `PATH` for:
+  - Audio-only downloads
+  - Video format conversion
+  - MP3 cover embedding
+- Discord integration depends on:
+  - A properly configured bot token
+  - Appropriate permissions in the specified channel
+- Some sites may be protected by anti-bot mechanisms; in such cases:
+  - Use up-to-date cookies in `cookies.txt`
+  - Consider lowering concurrency and rate limits
+  - Try again later if rate-limited
+
+<div align="center">
+
+---
+
+## License
+
+This project is available under the license specified in the repository.  
+Please check the repository’s `LICENSE` file for details.
+
+---
+
+</div>
