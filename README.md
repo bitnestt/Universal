@@ -8,7 +8,7 @@ It is designed to reliably download videos or audio from a wide range of sites, 
 - Global bandwidth limiting
 - Multi-download (concurrent jobs) with per-fragment concurrency
 - Lightweight daily statistics and smart cookie handling
-- 
+  
 ---
 
 ## Features
